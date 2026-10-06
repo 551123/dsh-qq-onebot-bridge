@@ -20,7 +20,7 @@ import {
 } from '../lib/panel.js'
 import { planNapcatAction } from '../lib/napcat-launch.js'
 import {
-  argvProfile, consoleStartCommand, mountQqAiPanel, napcatWebUiUrl, panelLinkSources, probePort, profileDirOf,
+  argvProfile, consoleLaunchPlan, consoleStartCommand, mountQqAiPanel, napcatWebUiUrl, panelLinkSources, probePort, profileDirOf,
   redactSecrets, resolveProfile, sameSiteGuard, shimHeartbeatFresh, spawnDetachedProcess,
 } from '../lib/settings-routes.js'
 import { Config } from '../lib/index.js'
@@ -276,10 +276,11 @@ check('顺序固定为 账号 → 更新日志 → 调试文档 → 调试台（
 const offConsole = panelFooterLinksWithConsole({
   version: '1.0.0', repoUrl: '', consolePort: 8799, consoleRunning: false, startCommand: 'node x.mjs',
 }).find((link) => link.id === 'console')
-check('调试台没启动时：链接改指宿主入口，并写明启动命令',
+check('调试台没启动时：链接改指宿主入口，并说明"点一下会自动拉起"（手动命令仍给出来）',
   offConsole.href === '/qqai/console' && offConsole.running === false
-  && offConsole.state.includes('未启动') && offConsole.state.includes('node x.mjs'),
-  offConsole.state)
+  && offConsole.state.includes('未启动') && offConsole.state.includes('自动拉起')
+  && offConsole.hint.includes('node x.mjs'),
+  `${offConsole.state} ｜ ${offConsole.hint}`)
 const onConsole = panelFooterLinksWithConsole({
   version: '1.0.0', repoUrl: '', consolePort: 8799, consoleRunning: true, startCommand: 'node x.mjs',
 }).find((link) => link.id === 'console')
@@ -528,8 +529,14 @@ const FAKE_TOKEN = 'tok-not-a-real-secret-1234'
 writeFileSync(join(fakeRoot, 'package.json'), JSON.stringify({ version: '1.2.3', repository: { url: 'git+https://github.com/me/r.git' } }), 'utf8')
 writeFileSync(join(fakeRoot, 'qq-control.json'), JSON.stringify({ ports: { control: 8799 }, token: FAKE_TOKEN }), 'utf8')
 
-const mountConsole = (running) => {
+/**
+ * v0.6.4：调试台支持**一键拉起** —— 没在跑时入口自己起一个（普通 node 进程，不需要提权）。
+ * 测试里把 spawnBackground 注入掉（**绝不真的起进程**），`flipAfter` 用来模拟"起来要等一会儿"。
+ */
+const mountConsole = (running, { flipAfter = 0, withEntry = true } = {}) => {
   const seen = []
+  const spawns = []
+  let probes = 0
   const hostStub = {
     webServer: {
       register(route) { seen.push(route); return () => { const at = seen.indexOf(route); if (at >= 0) seen.splice(at, 1) } },
@@ -537,17 +544,77 @@ const mountConsole = (running) => {
   }
   mountQqAiPanel(hostStub, {
     profile: 'web', config: {}, readFile: readFileSync, writeFile: writeFileSync, env,
-    linkSources: { root: fakeRoot }, probe: async () => running,
+    linkSources: { root: fakeRoot },
+    probe: async () => { probes += 1; return flipAfter > 0 && probes > flipAfter ? true : running },
+    exists: (file) => (withEntry || !String(file).endsWith('qq-control.mjs')),
+    consoleWaitMs: flipAfter > 0 ? 1200 : 0,
+    spawnBackground: ({ command, args, cwd }) => { spawns.push({ command, args, cwd }); return { pid: 4321 } },
   })
-  return seen
+  return { routes: seen, spawns }
 }
 
-const notRunningRoutes = mountConsole(false)
+// ① 启动计划（纯函数；exists 注入，免得依赖临时目录里真有没有入口文件）
+{
+  const plan = consoleLaunchPlan({ root: fakeRoot, execPath: 'C:\\node\\node.exe', exists: () => true })
+  check('consoleLaunchPlan：用宿主自己的 node 跑控制台入口，cwd 指插件根',
+    plan.ok === true && plan.command === 'C:\\node\\node.exe'
+    && plan.args.length === 1 && String(plan.args[0]).endsWith('qq-control.mjs') && plan.cwd === fakeRoot,
+    brief(plan))
+  const missing = consoleLaunchPlan({ root: join(fakeRoot, 'nope'), exists: () => false })
+  check('consoleLaunchPlan：入口不存在时明确拒绝（不假装能起）',
+    missing.ok === false && missing.reason.includes('找不到控制台入口'), brief(missing))
+}
+
+// ② 没在跑 + 拉得起来 ⇒ 直接 302 进去（这就是"一键拉起"）
+{
+  const startable = mountConsole(false, { flipAfter: 1 })
+  const autoRes = makeResponse()
+  await startable.routes.find((r) => r.path === '/qqai/console')
+    .handler(fakeRequest('GET', undefined, { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate' }), autoRes)
+  check('★点「调试台」时它没在跑 → 自动拉起并 302 进带 token 的地址（一键，不用敲命令）',
+    autoRes.out.status === 302
+    && String(autoRes.out.headers.location).includes(`127.0.0.1:8799/?token=${FAKE_TOKEN}`)
+    && startable.spawns.length === 1
+    && String(startable.spawns[0].args[0]).endsWith('qq-control.mjs') && startable.spawns[0].cwd === fakeRoot,
+    `status=${autoRes.out.status} spawns=${startable.spawns.length}`)
+}
+
+// ③ 拉起后端口一直不通 ⇒ 如实说明（页面与 JSON 都带原因）
+{
+  const stuck = mountConsole(false, { flipAfter: 0 })
+  const stuckRes = makeResponse()
+  await stuck.routes.find((r) => r.path === '/qqai/console').handler(fakeRequest('GET'), stuckRes)
+  check('★拉起后端口一直不通 → 页面如实说明"已经拉起进程但端口没通"，并给出手动命令',
+    stuckRes.out.status === 200 && stuckRes.out.body.includes('没能自动起来')
+    && stuckRes.out.body.includes('端口 8799 还没通') && stuckRes.out.body.includes('qq-control.mjs'),
+    String(stuckRes.out.status))
+  const stuckJson = makeResponse()
+  await stuck.routes.find((r) => r.path === '/qqai/console').handler(
+    { method: 'GET', url: '/qqai/console?format=json', headers: {}, socket: null, async *[Symbol.asyncIterator]() {} },
+    stuckJson)
+  const stuckBody = JSON.parse(stuckJson.out.body)
+  check('★`?format=json` 带出"拉起了但没通"的原因（桌面端据此提示）',
+    stuckJson.out.status === 200 && stuckBody.ok === false && stuckBody.running === false
+    && stuckBody.started === true && stuckBody.pid === 4321 && String(stuckBody.reason).includes('还没通'),
+    brief(stuckBody))
+}
+
+// ④ 入口文件缺失 ⇒ 不硬拉，如实拒绝
+{
+  const noEntry = mountConsole(false, { withEntry: false })
+  const noEntryRes = makeResponse()
+  await noEntry.routes.find((r) => r.path === '/qqai/console').handler(fakeRequest('GET'), noEntryRes)
+  check('★控制台入口文件不存在时不硬拉，页面上写明原因',
+    noEntry.spawns.length === 0 && noEntryRes.out.body.includes('找不到控制台入口'),
+    String(noEntryRes.out.status))
+}
+
+const notRunningRoutes = mountConsole(false).routes
 const consoleEntryOff = notRunningRoutes.find((r) => r.path === '/qqai/console')
 const offRes = makeResponse()
 await consoleEntryOff.handler(fakeRequest('GET'), offRes)
-check('调试台没跑时：入口回一页"怎么启动"（不是死链）',
-  offRes.out.status === 200 && offRes.out.body.includes('没有在运行')
+check('调试台没跑时：入口不再是死链（回一页说明 + 手动命令）',
+  offRes.out.status === 200 && offRes.out.body.includes('没能自动起来')
   && offRes.out.body.includes('qq-control.mjs') && offRes.out.headers['content-type'].includes('text/html'),
   String(offRes.out.status))
 const consoleCross = makeResponse()
@@ -577,7 +644,7 @@ const consoleSameSite = makeResponse()
 await consoleEntryOff.handler(fakeRequest('GET', undefined, { 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' }), consoleSameSite)
 check('调试台入口仍然拒绝"同站不同端口"（same-site）', consoleSameSite.out.status === 403, String(consoleSameSite.out.status))
 
-const runningRoutes = mountConsole(true)
+const runningRoutes = mountConsole(true).routes
 const consoleEntryOn = runningRoutes.find((r) => r.path === '/qqai/console')
 const onRes = makeResponse()
 await consoleEntryOn.handler(fakeRequest('GET'), onRes)
