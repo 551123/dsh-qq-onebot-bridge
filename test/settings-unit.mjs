@@ -617,6 +617,33 @@ check('调试台没跑时：入口不再是死链（回一页说明 + 手动命�
   offRes.out.status === 200 && offRes.out.body.includes('没能自动起来')
   && offRes.out.body.includes('qq-control.mjs') && offRes.out.headers['content-type'].includes('text/html'),
   String(offRes.out.status))
+check('★拉起了但没确认到端口 → 说明页会自己再试一次（带 retry 标记，不会无限循环）',
+  offRes.out.body.includes("location.replace(location.pathname + '?retry=1')")
+  && offRes.out.body.includes('if (true && !new URLSearchParams'),
+  offRes.out.body.includes('retry=1') ? '含一次性重试脚本' : '没有重试脚本')
+
+// ★真机踩到的坑：端口通了但 token 还没落盘 ⇒ 绝不能拿一条"没有 token 的地址"把用户送进去
+//   （那版页面满屏"token 无效"、点哪都没反应，看起来就像"只是个页面"）。
+{
+  const noTokenRoot = mkdtempSync(join(tmpdir(), 'qq-console-notoken-'))
+  writeFileSync(join(noTokenRoot, 'qq-control.json'), JSON.stringify({ ports: { control: 8799 } }), 'utf8')
+  const seen = []
+  const hostStub = { webServer: { register(route) { seen.push(route); return () => {} } } }
+  mountQqAiPanel(hostStub, {
+    profile: 'web', config: {}, readFile: readFileSync, writeFile: writeFileSync, env,
+    linkSources: { root: noTokenRoot },
+    probe: async () => true, exists: () => true, consoleWaitMs: 0, consoleTokenWaitMs: 0,
+    spawnBackground: () => ({ pid: 1 }),
+  })
+  const res = makeResponse()
+  await seen.find((r) => r.path === '/qqai/console').handler(
+    { method: 'GET', url: '/qqai/console?format=json', headers: {}, socket: null, async *[Symbol.asyncIterator]() {} }, res)
+  const body = JSON.parse(res.out.body)
+  check('★控制台在跑但读不到 token 时如实标出 tokenReady:false（而不是给一条"无效地址"）',
+    body.ok === true && body.running === true && body.tokenReady === false && !String(body.url).includes('token='),
+    brief(body))
+  rmSync(noTokenRoot, { recursive: true, force: true })
+}
 const consoleCross = makeResponse()
 await consoleEntryOff.handler(fakeRequest('GET', undefined, { origin: 'https://evil.example' }), consoleCross)
 check('调试台入口也拒绝跨站（它会把带 token 的地址交出去）',
