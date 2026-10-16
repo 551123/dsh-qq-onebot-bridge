@@ -1,6 +1,6 @@
 # 更新日志 / Changelog
 ## v0.6 系列 —— 轻量化设计 / Lightweight
-### v0.6.5（2026-10-16）— 修好那个按钮 / The button nobody could press
+### v0.6.5（2026-10-16）— NapCat 启动链路修复 / NapCat launch path fixed
 
 用户报（issue #2，原话）：「我在小鲸鱼工作台里填了那个脚本，又说缺少垫片脚本路径(shimFile)，
 我在文件夹找了好几遍都没找到这个 shimFile 在哪……我不理解，我不理解，还是说作者你没有塞 shimFile 进文件夹？」
