@@ -32,7 +32,8 @@ export function runDiagnose({ config, snapshot, runtime, events = [], now = Date
   // ---- 本机依赖 ----
   checks.push(item('node', 'node 可执行文件', config?.nodeExe && exists(config.nodeExe), config?.nodeExe || '未探测到', '设置 qq-control.json 的 nodeExe'))
   checks.push(item('dsh', 'DSH 宿主入口 bin.js', config?.dshBin && exists(config.dshBin), config?.dshBin || '未探测到', '用 --print-config 检查探测结果，或手动设置 dshBin'))
-  checks.push(item('napcat-bat', 'NapCat 启动脚本', config?.napcatBat && exists(config.napcatBat), config?.napcatBat || '未探测到', '设置 napcatBat，或先安装 NapCat', 'warn'))
+  checks.push(item('napcat-bat', 'NapCat 启动脚本', config?.napcatBat && exists(config.napcatBat), config?.napcatBat || '未探测到',
+    '设置 napcatBat，或先安装 NapCat（填 bootmain\\launcher.bat，别填 napcat.bat：那个在这版只是拉起加载器 + pause）', 'warn'))
   checks.push(item('cwd', '宿主工作目录', Boolean(config?.cwd) && exists(config.cwd), config?.cwd || '未设置', '设置 cwd（宿主与桥都在这个目录读写日志/状态）'))
 
   // ---- 端口 ----
@@ -71,9 +72,19 @@ export function runDiagnose({ config, snapshot, runtime, events = [], now = Date
 
   // ---- 运行快照（跨进程读到的桥状态）----
   const runtimeFresh = runtime && now - (runtime.updatedAt ?? 0) < FRESH_WINDOW_MS
+  const runtimeFile = config?.logs?.runtime || 'qq-runtime.json'
+  /**
+   * issue #2（2026-10-16）：用户看到「桥：无快照」时完全不知道该查什么。
+   * 体检这里把**两种情况分开**：宿主在跑却读不到快照 ⇒ 插件没启用（或写的不是这个文件）；
+   * 宿主没跑 ⇒ 那本来就正常，快照是宿主里的插件写的。
+   */
+  const runtimeHint = host?.listening
+    ? `宿主在跑（PID ${host.pid}）却读不到快照：① QQ助手插件没启用；② 插件的工作目录与控制台配置的不是同一个`
+      + `（它把快照写成 <它自己的 cwd>\\qq-runtime.json）。用控制台「启动宿主」两边就一致；看的是 ${runtimeFile}`
+    : `宿主没在运行 —— 快照是宿主里的 QQ助手插件写的，先点「启动宿主」。看的是 ${runtimeFile}`
   checks.push(item('runtime', '桥的运行快照新鲜', runtimeFresh,
-    runtime ? `更新于 ${Math.round((now - runtime.updatedAt) / 1000)}s 前，版本 ${runtime.version}，会话 ${runtime.sessionCount}` : '读不到 qq-runtime.json',
-    '宿主没跑或桥插件没加载时会没有快照；先启动宿主', 'warn'))
+    runtime ? `更新于 ${Math.round((now - runtime.updatedAt) / 1000)}s 前，版本 ${runtime.version}，会话 ${runtime.sessionCount}` : `读不到 ${runtimeFile}`,
+    runtimeHint, 'warn'))
   if (runtime) {
     const sessions = runtime.sessions ?? []
     checks.push(item('sessions', '会话映射', true, `${sessions.length} 个会话${sessions.length ? `（最近：${sessions[0].chatKey} ${sessions[0].resumed ? '续接' : '新建'}）` : ''}`, ''))

@@ -100,8 +100,18 @@
     <div class="grid2" style="margin-top:10px">
       <label class="meta">宿主工作目录<input id="cfgCwd" /></label>
       <label class="meta">dsh bin.js 路径<input id="cfgDshBin" /></label>
-      <label class="meta">NapCat 启动脚本<input id="cfgNapcatBat" /></label>
+      <label class="meta">NapCat 启动脚本<input id="cfgNapcatBat" placeholder="…\NapCat\bootmain\launcher.bat" /></label>
       <label class="meta">GPT-SoVITS 启动脚本<input id="cfgTtsBat" /></label>
+    </div>
+    <!--
+      这段提示是 issue #2 的直接产物：用户按报错里的 "shimFile" 去文件夹里翻了五小时。
+      说清"填哪个文件"（launcher.bat 而不是 napcat.bat）与"另外两个文件是自动生成的、在工作目录里"。
+    -->
+    <div class="meta" style="margin-top:6px">
+      NapCat 启动脚本填 <b>bootmain\launcher.bat</b>（不是同目录的 napcat.bat：那个只是拉起加载器 + pause，实测秒退）；
+      留空时控制台会自己去常见安装位置找。启动时会在<b>工作目录</b>里生成
+      <code>qq-napcat-launch.cmd</code>（垫片脚本）与 <code>qq-napcat-launch.log</code>（启动日志）——
+      它们是点「启动 NapCat」时现写的，<b>不在插件安装包里</b>，所以别去插件目录找。
     </div>
     <div class="row" style="margin-top:8px">
       <button onclick="saveConfig()">保存路径配置</button>
@@ -336,8 +346,20 @@ function toast(text) {
 async function act(path) {
   const labels = { '/api/host/stop': '停止宿主', '/api/napcat/stop': '停止 NapCat/QQ', '/api/tts/stop': '停止 GPT-SoVITS', '/api/all/stop': '全部停止' };
   if (labels[path] && !confirm(labels[path] + '？')) return;
-  const result = await api(path, { method: 'POST', body: JSON.stringify({}) });
-  toast((result.ok === false ? '⚠️ ' : '✅ ') + (result.reason || '完成'));
+  /**
+   * 启动 NapCat 现在会**等服务端确认垫片心跳**（最多 8 秒），所以按钮要禁一下并说在等什么——
+   * 否则用户以为"点了没反应"就会连点，连点又会拉起第二个提权进程（issue #2 的现场感受就是这么来的）。
+   */
+  const busy = /napcat\/(start|restart)/.test(path);
+  const button = busy ? document.querySelector(`button[onclick="act('${path}')"]`) : null;
+  const label = button?.textContent || '';
+  if (button) { button.disabled = true; button.textContent = '请求中…（最多等 8 秒）'; }
+  try {
+    const result = await api(path, { method: 'POST', body: JSON.stringify({}) });
+    toast((result.ok === false ? '⚠️ ' : '✅ ') + (result.reason || '完成'));
+  } finally {
+    if (button) { button.disabled = false; button.textContent = label; }
+  }
   setTimeout(refresh, 1200);
 }
 function freePort(name) {
@@ -376,9 +398,51 @@ function renderDiagnose() {
     return `<div class="check"><span>${icon}</span><div><b>${c.title}</b> — ${c.detail}${c.hint ? `<div class="hint">↳ ${c.hint}</div>` : ''}</div></div>`;
   }).join('');
 }
-function renderRuntime(runtime) {
+/**
+ * 「桥：无快照」到底为什么 —— 三种情况分开说（issue #2 用户原话「我不理解，我不理解」：
+ * 面板只丢一个「无快照」，既不说为什么，也不说下一步该干什么）。
+ *   ① 快照太旧（>15 分钟）：桥停了，或插件被卸载/禁用了；
+ *   ② 宿主没在跑：快照是**宿主里的插件**写的，宿主不在就什么都没有；
+ *   ③ 宿主在跑却没有快照：插件没启用，或它写的文件跟控制台看的不是同一个。
+ */
+function describeBridge(status) {
+  const file = (status?.config?.logs?.runtime) || 'qq-runtime.json';
+  const hostUp = (status?.ports || []).some((p) => p.name === 'host' && p.listening);
+  const age = typeof status?.runtime?.ageSeconds === 'number' ? status.runtime.ageSeconds : null;
+  if (age !== null && age < 900) {
+    return { alive: true, label: '活跃', hint: '运行快照 ' + age + ' 秒前更新（' + file + '）' };
+  }
+  if (age !== null) {
+    const minutes = Math.max(1, Math.round(age / 60));
+    return {
+      alive: false,
+      label: '无快照（' + minutes + ' 分钟前）',
+      hint: '运行快照停在 ' + minutes + ' 分钟前 ⇒ 桥已经停了，或插件被卸载/禁用。看的是 ' + file,
+    };
+  }
+  if (!hostUp) {
+    return {
+      alive: false,
+      label: '无快照（宿主没跑）',
+      hint: '运行快照由 DSH 宿主里的 QQ助手插件写出，宿主没起来就不会有：先点上面的「启动宿主」。看的是 ' + file,
+    };
+  }
+  return {
+    alive: false,
+    label: '无快照（插件没加载）',
+    hint: '宿主在跑，但没人写快照，两种可能：① QQ助手插件没启用；'
+      + '② 插件的工作目录和控制台这里配的不是同一个 —— 插件把快照写成 <它自己的工作目录>\\qq-runtime.json，'
+      + '而控制台看的是 ' + file + '。用控制台「启动宿主」两边就一致；自己起的宿主请把「配置 → 工作目录」调成同一个目录',
+  };
+}
+function renderRuntime(runtime, status) {
   const el = document.getElementById('runtime');
-  if (!runtime) { el.textContent = '宿主/桥未运行时没有快照。'; document.getElementById('runtimeMeta').textContent = ''; return; }
+  if (!runtime) {
+    const why = status ? describeBridge(status) : null;
+    el.textContent = why ? ('还没有运行快照 —— ' + why.hint) : '宿主/桥未运行时没有快照。';
+    document.getElementById('runtimeMeta').textContent = '';
+    return;
+  }
   document.getElementById('runtimeMeta').textContent = `v${runtime.version} · 更新于 ${runtime.ageSeconds}s 前 · 运行 ${Math.round((runtime.uptimeSeconds || 0) / 60)} 分钟`;
   const sessions = runtime.sessions || [];
   const features = runtime.features || {};
@@ -474,9 +538,10 @@ function render(status) {
       ? 'NapCat 报了 bot_offline：QQ 掉线，或同一账号在别处登录（同一客户端再开一个实例会抢会话）'
       : '6700 上没有已建立的连接（NapCat 可能没在运行）';
   const bridgePill = document.getElementById('bridgePill');
-  const bridgeAlive = (status.runtime?.ageSeconds ?? 9999) < 900;
-  bridgePill.textContent = '桥：' + (bridgeAlive ? '活跃' : '无快照');
-  bridgePill.className = 'pill ' + (bridgeAlive ? 'on' : 'off');
+  const bridge = describeBridge(status);
+  bridgePill.textContent = '桥：' + bridge.label;
+  bridgePill.className = 'pill ' + (bridge.alive ? 'on' : 'off');
+  bridgePill.title = bridge.hint;
   // 「QQ助手账号」按钮（= NapCat 的 WebUI：登录状态 / 扫码）：6099 没在监听时给的是死链，
   // 这里直接禁用并说明原因。
   // v0.5.9：链接必须是**带 token 的**——NapCat 的 WebUI 自己有 token（webui.json），
@@ -556,7 +621,7 @@ async function refresh() {
     const status = await api('/api/status');
     render(status);
     lastRuntime = status.runtime ?? null;
-    renderRuntime(status.runtime ?? null);
+    renderRuntime(status.runtime ?? null, status);
     renderInboxMeta();
     setConnOk(true);
   } catch (e) {

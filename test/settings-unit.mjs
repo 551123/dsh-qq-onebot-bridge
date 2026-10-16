@@ -18,7 +18,7 @@ import {
   PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
   panelSnapshot, readPatchValue, upsertPatchValue,
 } from '../lib/panel.js'
-import { planNapcatAction } from '../lib/napcat-launch.js'
+import { detectNapcatBat, planNapcatAction } from '../lib/napcat-launch.js'
 import {
   argvProfile, consoleLaunchPlan, consoleStartCommand, mountQqAiPanel, napcatWebUiUrl, panelLinkSources, probePort, profileDirOf,
   redactSecrets, resolveProfile, sameSiteGuard, shimHeartbeatFresh, spawnDetachedProcess,
@@ -975,6 +975,13 @@ check('★管理员分支走 WMI Win32_Process.Create，且 if/else 之间没有
   const spawned = []
   const shims = []
   const actionRoutes = []
+  /**
+   * 启动日志的 mtime 桩：**点击之前是 5 秒前的旧文件**，`spawnDetached` 之后才前进
+   *（真机上就是垫片跑起来写了那行心跳）。这样才测得出"只认这次新写进去的心跳"——
+   * 拿一个恒定不变的 mtime 当桩，会把 `since` 判据整个测没。
+   */
+  let napcatLogMtime = Date.now() - 5000
+  const shimRanNow = () => { napcatLogMtime = Math.max(Date.now(), napcatLogMtime + 1) }
   mountQqAiPanel({
     webServer: {
       register(route) { actionRoutes.push(route); return () => { const at = actionRoutes.indexOf(route); if (at >= 0) actionRoutes.splice(at, 1) } },
@@ -983,14 +990,14 @@ check('★管理员分支走 WMI Win32_Process.Create，且 if/else 之间没有
     profile: 'web', config: {}, readFile: readFileSync, env,
     // 垫片要先落盘再执行 —— 这里把写入内容抓下来（断言"真正执行的脏活"）。
     writeFile: (file, content, encoding) => { shims.push({ file, content }); return writeFileSync(file, content, encoding) },
-    // 垫片心跳桩：日志文件视作"刚刚写过、且含心跳行"（真机上这行是垫片自己写的）。
-    stat: (target) => (String(target).endsWith('.log') ? { mtimeMs: Date.now() } : statSync(target)),
+    // 垫片心跳桩：日志文件视作"含心跳行"，mtime 由 spawnDetached 推进（见上面的 napcatLogMtime）。
+    stat: (target) => (String(target).endsWith('.log') ? { mtimeMs: napcatLogMtime } : statSync(target)),
     readFile: (target, encoding) => (String(target).endsWith('.log') ? '=== shim start 2026/10/06 1:00:00 ===\r\n' : readFileSync(target, encoding)),
     linkSources: { root: napcatRoot },
     probe: async () => false,                                  // 6099 没在听
     exists: (file) => /launcher\.bat$/i.test(file),             // 同目录只有 launcher.bat
     napcatWaitMs: 0,                                            // 单测别真等 8 秒
-    spawnDetached: async ({ command, args }) => { spawned.push({ command, args }); return { pid: 4242, failed: false, code: 0, stdout: 'QAI-ELEVATED', stderr: '' } },
+    spawnDetached: async ({ command, args }) => { spawned.push({ command, args }); shimRanNow(); return { pid: 4242, failed: false, code: 0, stdout: 'QAI-ELEVATED', stderr: '' } },
     exec: (command, args, options, callback) => {
       const done = typeof options === 'function' ? options : callback
       // 假 tasklist：一个 NapCat 加载器 + 一个个人 QQ（后者绝不能被写进命令）
@@ -1034,6 +1041,42 @@ check('★管理员分支走 WMI Win32_Process.Create，且 if/else 之间没有
     && !String(shims[1]?.content ?? '').includes('4200')
     && spawned[1]?.args.join(' ').includes('qq-napcat-launch.cmd'),
     brief({ status: reloginRes.out.status, cmd: String(spawned[1]?.args.join(' ')).slice(-90) }))
+
+  /**
+   * ★ issue #2 的另一半（2026-10-16）：「搞了很久都说没有 napcat 脚本」。
+   *   面板原来只认 `qq-control.json` 里的 `napcatBat`，配置为空就直接说"未配置"；
+   *   而控制台早就会自己探测常见安装位置 ⇒ 同一台机器上"控制台能用、面板说没配"。
+   *   现在两边共用 `detectNapcatBat`（见 lib/napcat-launch.js）。
+   */
+  check('★配置里没填 napcatBat 时，面板自己也去常见位置探测（不再干说"未配置"）',
+    detectNapcatBat({
+      env: { LOCALAPPDATA: 'C:\\Users\\someone\\AppData\\Local' },
+      exists: (file) => String(file).endsWith('bootmain\\napcat.bat'),
+    }) === 'C:\\Users\\someone\\AppData\\Local\\Programs\\NapCat\\bootmain\\napcat.bat',
+    detectNapcatBat({ env: {}, exists: () => false }) || '(探测不到时应为空串)')
+  check('探测表把用户填的路径排在第一位（填了就用它）',
+    detectNapcatBat({ configured: 'D:\\My\\napcat.bat', env: {}, exists: () => true }) === 'D:\\My\\napcat.bat'
+    && detectNapcatBat({ configured: 'D:\\My\\napcat.bat', env: {}, exists: () => false }) === '')
+  {
+    // 空配置 + 探测不到 NapCat 的机器：报错必须是**人话 + 下一步**（原来只有"未配置 NapCat 启动脚本"）
+    const noBatRoutes = []
+    mountQqAiPanel({
+      webServer: { register(route) { noBatRoutes.push(route); return () => { const at = noBatRoutes.indexOf(route); if (at >= 0) noBatRoutes.splice(at, 1) } } },
+    }, {
+      profile: 'web', config: {}, readFile: (file) => (String(file).endsWith('qq-control.json') ? '{"cwd":"C:\\\\QQAI"}' : readFileSync(file)),
+      writeFile: writeFileSync, env: { DSH_HOME: dir }, linkSources: { root: napcatRoot },
+      probe: async () => false, exists: () => false, napcatWaitMs: 0,
+      // 探测不到就**绝不能**真去拉进程
+      spawnDetached: () => { throw new Error('不该被调用') },
+      exec: (command, args, options, callback) => (typeof options === 'function' ? options : callback)(null, '', ''),
+    })
+    const noBat = makeResponse()
+    await noBatRoutes.find((r) => r.path === '/qqai/napcat/start').handler(fakeRequest('POST', {}, JSON_HEADERS), noBat)
+    const noBatBody = JSON.parse(noBat.out.body)
+    check('★没配、也探测不到 NapCat 时：报错说清"填哪个文件、填在哪"',
+      noBatBody.ok === false && noBatBody.reason.includes('launcher.bat') && noBatBody.reason.includes('qq-control.json'),
+      brief(noBatBody.reason))
+  }
 
   // 已经在跑时：不重复拉，指路"重新登录"
   const runningRoutes = []

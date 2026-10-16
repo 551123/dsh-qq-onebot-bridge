@@ -11,7 +11,7 @@ import { DEFAULT_PORTS, PORT_LABELS, configWarnings, detectDshBin, detectPaths, 
 import {
   NAPCAT_LOADER_NAMES, QR_STALE_SECONDS, assertKillAllowed, createSupervisor, extractHostUrl, inspect,
   killTree, napcatLaunchCommand, napcatRestartCommand, parseNetstat, parseTasklist,
-  portOf, publicConfig, qrStatus, run, startDetached, summarizePorts, tailLines,
+  portOf, publicConfig, qrStatus, run, spawnElevated, startDetached, summarizePorts, tailLines,
 } from '../control/lib/supervisor.mjs'
 import { createControlServer, createToken, originAllowed, readUi } from '../control/lib/server.mjs'
 import { groupsView, jobsView, perfReport } from '../control/lib/perf.mjs'
@@ -22,6 +22,11 @@ let failed = 0
 function check(name, ok, extra = '') {
   if (ok) { passed++; console.log('PASS', name, extra) }
   else { failed++; console.log('FAIL', name, extra) }
+}
+/** 断言细节摘要成一行（对象 → JSON、长文本截断）：与 settings-unit 同一口径。 */
+function brief(value, max = 120) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '')
+  return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'qq-control-test-'))
@@ -535,14 +540,154 @@ check('qrStatus 新鲜判定用 QR_STALE_SECONDS',
   rmSync(qrDir, { recursive: true, force: true })
 }
 
+/**
+ * ★ issue #2 的核心回归（2026-10-16 用户报：「我在工作台里填了那个脚本，又说缺少垫片脚本路径(shimFile)，
+ *   我在文件夹找了好几遍都没找到这个 shimFile 在哪」）：
+ *   `startNapcat` / `restartNapcatLogin` 原来调 `napcatLaunchCommand(chosen.path)` **一个参数都没传**，
+ *   于是每次点「启动 NapCat」都命中 `launchPlan` 的 shimFile 判据 ⇒ 控制台里这个按钮**从来就没成功过**。
+ *   现在：垫片路径与日志路径都从工作目录推、垫片先落盘、再执行提权命令、最后**等心跳**。
+ */
+{
+  const shimDir = mkdtempSync(join(tmpdir(), 'qq-shim-test-'))
+  const shimFile = join(shimDir, 'qq-napcat-launch.cmd')
+  const logFile = join(shimDir, 'qq-napcat-launch.log')
+  const written = []
+  // 日志 mtime 桩：点击之前是 5 秒前的旧文件，**垫片真的跑起来才会前进**（真机就是垫片写那行心跳）。
+  let logMtime = Date.now() - 5000
+  const tick = () => { logMtime = Math.max(Date.now(), logMtime + 1) }
+  /**
+   * 假子进程：形状要够真——`spawnElevated` 会读 `stdout` 并用 `once('exit')` 判定收尾。
+   * 太简的桩（只有 `{ pid, unref }`）会让它一路等到超时才继续，单测白白慢 8 秒。
+   */
+  const fakeChild = ({ code = 0, stdout = 'QAI-RUNAS' } = {}) => ({
+    pid: 909,
+    stdout: { on: (event, handler) => { if (event === 'data') setTimeout(() => handler(stdout), 0) } },
+    stderr: { on: () => {} },
+    once: (event, handler) => { if (event === 'exit') setTimeout(() => handler(code), 1) },
+    unref() {},
+  })
+  const baseDeps = {
+    exists: (file) => /launcher\.bat$/i.test(file),
+    spawnImpl: () => { tick(); return fakeChild() },
+    shimWaitMs: 0,
+    writeFile: (file, content) => { written.push({ file, content }) },
+    ensureDir: (target) => { written.push({ dir: target }) },
+    stat: (target) => ({ mtimeMs: String(target).endsWith('.log') ? logMtime : Date.now() }),
+    readFile: (target) => (String(target).endsWith('.log') ? '=== shim start now ===\r\n' : ''),
+  }
+  const supConfig = { ...config, cwd: shimDir, napcatBat: 'C:\\NapCat\\bootmain\\napcat.bat', napcatQr: '' }
+  const sup = createSupervisor(supConfig, baseDeps)
+
+  // ① 垫片没跑（心跳没动）时：**不许**再回那句 "缺少垫片脚本路径（shimFile）"，而要如实说没心跳
+  const stalled = await createSupervisor(supConfig, { ...baseDeps, spawnImpl: () => fakeChild() }).startNapcat()
+  check('★控制台「启动 NapCat」不再回"缺少垫片脚本路径（shimFile）"（issue #2 的原话）',
+    String(stalled.reason).includes('shimFile') === false && String(stalled.reason).includes('没有留下心跳')
+    && String(stalled.reason).includes('看不到 UAC 弹窗')
+    && written.some((item) => item.file === shimFile && String(item.content).includes('launcher.bat')),
+    brief({ ok: stalled.ok, reason: String(stalled.reason).slice(0, 90) }))
+  check('垫片落点 = 工作目录\\qq-napcat-launch.cmd（与 DSH 面板写的是同一个文件）',
+    written.some((item) => item.file === shimFile) && written.some((item) => item.dir === shimDir),
+    brief(written.map((item) => item.file ?? item.dir)))
+  check('写的垫片里带 cd /d 与 call launcher.bat（脏活都在文件里）',
+    String(written.find((item) => item.file === shimFile)?.content ?? '').includes('call "C:\\NapCat\\bootmain\\launcher.bat"'),
+    brief(written.length))
+
+  // ② 心跳动了 ⇒ 才算成功，并且不再让用户去点一个本机根本不会出现的 UAC 弹窗
+  const ran = await sup.startNapcat()
+  check('★垫片留下心跳才算成功：ok=true、带 shimRan/shimFile/logFile（旧文案让用户去点 UAC 弹窗）',
+    ran.ok === true && ran.shimRan === true && ran.shimFile === shimFile && ran.logFile === logFile
+    && String(ran.reason).includes('垫片已执行') && String(ran.reason).includes('请在 UAC 弹窗') === false,
+    brief({ ok: ran.ok, shimRan: ran.shimRan, reason: String(ran.reason).slice(0, 90) }))
+
+  // ③ 60 秒内点第二次：老心跳还在窗口里，但它不是"这次"写进去的 ⇒ 不能当证据
+  const again = await createSupervisor(supConfig, { ...baseDeps, spawnImpl: () => fakeChild() }).startNapcat()
+  check('★60 秒内点第二次：日志没被新写过就不算成功（老心跳不能当证据）',
+    again.ok === false && again.shimRan === false && String(again.reason).includes('没有留下心跳'),
+    brief(String(again.reason).slice(0, 90)))
+
+  // ③b 提权子进程**不能带 detached**（本机实测：detached 的 powershell 根本不执行、退出码还是 0）。
+  //     这里从源码层面钉住：napcat 那条路必须走 spawnElevated，不能退回 startDetached。
+  const supervisorSource = readFileSync(join(here0, '..', 'control', 'lib', 'supervisor.mjs'), 'utf8')
+  const napcatBlock = supervisorSource.slice(supervisorSource.indexOf('async function runNapcatPlan'), supervisorSource.indexOf('async function startNapcat'))
+  const elevatedSource = /export function spawnElevated[\s\S]*?\n\}/.exec(supervisorSource)?.[0] ?? ''
+  check('★拉起提权命令走 spawnElevated（不带 detached —— 本机实测 detached 的 powershell 根本不执行）',
+    elevatedSource !== '' && elevatedSource.includes('detached') === false
+    && /spawnElevated\(\{/.test(napcatBlock) && napcatBlock.includes('startDetached') === false,
+    `spawnElevated 源码 ${elevatedSource.length} 字符，含 detached=${elevatedSource.includes('detached')}｜napcat 用 startDetached=${napcatBlock.includes('startDetached')}`)
+
+  // ③c powershell 非零退出 ⇒ 如实报错并带出原文（原来控制台把子进程输出整个丢掉了）
+  const refused = await createSupervisor(supConfig, {
+    ...baseDeps,
+    spawnImpl: () => fakeChild({ code: 1, stdout: '' }),
+  }).startNapcat()
+  check('★powershell 非零退出时如实报错（不再只回一句"没有心跳"让人猜）',
+    refused.ok === false && String(refused.reason).includes('没发出去') && String(refused.reason).includes('退出码 1'),
+    brief(String(refused.reason).slice(0, 100)))
+
+  // ④ 重启登录：同一条路，也要带垫片路径（原来这里也漏了）
+  const reloginWritten = []
+  const reloginSup = createSupervisor(supConfig, {
+    ...baseDeps,
+    writeFile: (file, content) => { reloginWritten.push({ file, content }) },
+    exec: (command, args, options, callback) => (typeof options === 'function' ? options : callback)(
+      null, '"NapCatWinBootMain.exe","4100","Console","1","1 K"\n"QQ.exe","4200","Console","1","1 K"\n', ''),
+  })
+  const relogin = await reloginSup.restartNapcatLogin()
+  check('★控制台「重启登录流程」也带上了垫片路径（同一条路别只修一半）',
+    relogin.ok === true && reloginWritten.some((item) => item.file === shimFile && String(item.content).includes('taskkill /PID 4100'))
+    && !String(reloginWritten[0]?.content ?? '').includes('4200'),
+    brief({ ok: relogin.ok, reason: String(relogin.reason).slice(0, 80) }))
+
+  // ⑤ 写不了垫片（权限/目录问题）→ 说清是哪个文件 + 原始原因，绝不吞掉
+  const denied = await createSupervisor(supConfig, {
+    ...baseDeps, writeFile: () => { throw new Error('EACCES: permission denied') },
+  }).startNapcat()
+  check('写不了垫片时如实报错（点名文件 + 原始原因）',
+    denied.ok === false && String(denied.reason).includes(shimFile) && String(denied.reason).includes('EACCES'),
+    brief(String(denied.reason).slice(0, 100)))
+  rmSync(shimDir, { recursive: true, force: true })
+}
+
+/**
+ * ---- spawnElevated：提权命令的启动形状（issue #2 第二层原因的行为侧断言）----
+ *
+ * 本机实测：`detached: true` 的 powershell 子进程**根本不执行**（退出码 0、零输出、垫片一行没写）。
+ * 所以「不带 detached」不是风格问题，是这条路能不能跑起来的前提。
+ */
+{
+  const fakeSpawnChild = (options = {}) => ({
+    pid: 4321,
+    stdout: { on: (event, handler) => { if (event === 'data' && options.stdout) setTimeout(() => handler(options.stdout), 0) } },
+    stderr: { on: (event, handler) => { if (event === 'data' && options.stderr) setTimeout(() => handler(options.stderr), 0) } },
+    once: (event, handler) => { if (event === 'exit') setTimeout(() => handler(options.code ?? 0), 1) },
+    unref() {},
+  })
+  const seen = []
+  const okResult = await spawnElevated({
+    command: 'powershell.exe',
+    args: ['-NoProfile'],
+    spawnImpl: (command, args, options) => { seen.push({ command, args, options }); return fakeSpawnChild({ stdout: 'QAI-RUNAS\n' }) },
+  })
+  check('spawnElevated 抓得到 powershell 的输出与分支标记（旧实现整个丢掉）',
+    okResult.stdout.trim() === 'QAI-RUNAS' && okResult.code === 0 && okResult.pid === 4321,
+    brief({ code: okResult.code, stdout: okResult.stdout.trim() }))
+  check('★spawnElevated 不带 detached（本机实测 detached 的 powershell 根本不执行）',
+    seen[0]?.options?.detached === undefined && seen[0]?.options?.windowsHide === true,
+    brief(seen[0]?.options))
+  const failed = await spawnElevated({ command: 'powershell.exe', spawnImpl: () => fakeSpawnChild({ code: 1, stderr: 'Access is denied' }) })
+  check('spawnElevated 如实带回非零退出码与 stderr',
+    failed.code === 1 && failed.stderr.includes('Access is denied'), brief({ code: failed.code, stderr: failed.stderr }))
+  const thrown = await spawnElevated({ command: 'nope.exe', spawnImpl: () => { throw new Error('ENOENT 找不到文件') } })
+  check('spawnElevated 把 spawn 抛错变成 failed 结果（不把异常丢给调用方）',
+    thrown.failed === true && thrown.message.includes('ENOENT'), brief(thrown.message))
+}
+
 check('ui.html 里有二维码卡片与 token 缺失提示',
   readFileSync(join(here0, '..', 'control', 'ui.html'), 'utf8').includes('loadQr')
   && readFileSync(join(here0, '..', 'control', 'ui.html'), 'utf8').includes('地址里没有 token'),
   'ui.html')
 
 rmSync(dir, { recursive: true, force: true })
-console.log(`\n${passed} passed, ${failed} failed`)
-process.exit(failed > 0 ? 1 : 0)
 
 // 审查 O1/O2：二维码只认 PNG 魔数；stat 报错要区分"不存在"与"读不到"
 {
@@ -558,3 +703,8 @@ process.exit(failed > 0 ? 1 : 0)
   check('qrStatus ENOENT 才算真的不存在', missing.exists === false && missing.error === '', JSON.stringify(missing))
   rmSync(qrDir2, { recursive: true, force: true })
 }
+
+// ⚠️ 汇总与退出必须在**最后**：原来它们写在这段审查断言之前，那 4 条其实从来没跑过
+//    （进程早退了，却照样打印"全绿"）——测试诚实性问题和功能 bug 一样要修。
+console.log(`\n${passed} passed, ${failed} failed`)
+process.exit(failed > 0 ? 1 : 0)

@@ -7,6 +7,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, parse, resolve } from 'node:path'
+import { detectNapcatBat, NAPCAT_BAT_HINT } from '../../lib/napcat-launch.js'
 
 /** Ports the console cares about. 6700 is pinned by the OneBot client config. */
 export const DEFAULT_PORTS = {
@@ -119,13 +120,10 @@ export function detectPaths(config = {}, { env = process.env, exists = existsSyn
     join(localAppData, 'Programs', 'DSH Desktop', 'resources', 'app.asar.unpacked', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
   ])
 
-  const napcatBat = firstExisting([
-    config.napcatBat,
-    localAppData ? join(localAppData, 'Programs', 'NapCat', 'bootmain', 'napcat.bat') : '',
-    env.ProgramFiles ? join(env.ProgramFiles, 'NapCat', 'bootmain', 'napcat.bat') : '',
-    env['ProgramFiles(x86)'] ? join(env['ProgramFiles(x86)'], 'NapCat', 'bootmain', 'napcat.bat') : '',
-    home ? join(home, '.dsh-qq', 'napcat.bat') : '',
-  ])
+  // NapCat 启动脚本：候选表住在 `lib/napcat-launch.js`（DSH 面板读的是**同一份**探测结果，
+  // 免得出现"控制台自己找到了、面板还说没配"——issue #2 就是这么来的）。
+  const detectedNapcat = detectNapcatBat({ configured: config.napcatBat, env, exists })
+  const napcatBat = detectedNapcat === '' ? '' : resolve(detectedNapcat)
   const napcatQr = firstExisting([
     config.napcatQr,
     napcatBat ? join(dirname(napcatBat), 'cache', 'qrcode.png') : '',
@@ -187,7 +185,7 @@ export function configWarnings(config) {
   else if (!existsSync(config.nodeExe)) warnings.push(`node 可执行文件不存在：${config.nodeExe}`)
   if (!config.dshBin) warnings.push('找不到 dsh bin.js（无法启动宿主，可用 dshBin 手动指定）')
   else if (!existsSync(config.dshBin)) warnings.push(`dsh bin.js 不存在：${config.dshBin}`)
-  if (!config.napcatBat) warnings.push('找不到 NapCat 启动脚本（napcatBat）')
+  if (!config.napcatBat) warnings.push(`找不到 NapCat 启动脚本（napcatBat）：${NAPCAT_BAT_HINT}`)
   if (!config.cwd) warnings.push('未设置宿主工作目录（cwd）')
   return warnings
 }

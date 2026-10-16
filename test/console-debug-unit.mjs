@@ -237,6 +237,32 @@ server.close()
 
   const requiredFeatures = ['实时事件流', '决策链', '一键体检', '运行快照', '导出诊断包']
   check('面板包含 v0.4 调试区块', requiredFeatures.every((label) => ui.includes(label)), requiredFeatures.filter((label) => !ui.includes(label)).join(','))
+  /**
+   * ★ issue #2（2026-10-16）：用户原话「全部都好了就差'桥': 无快照'我不理解，我不理解」。
+   * 「无快照」这四个字必须自带原因与下一步：宿主没跑 / 插件没加载 / 快照几分钟前（三种分开说）。
+   */
+  check('★「桥：无快照」会说明原因（宿主没跑 / 插件没加载 / 快照太旧）',
+    script.includes('function describeBridge')
+    && ui.includes('宿主没跑') && ui.includes('插件没加载') && ui.includes('分钟前')
+    && ui.includes('describeBridge(status)') && ui.includes('bridgePill.title'),
+    `describeBridge=${script.includes('function describeBridge')}`)
+  // 四种情况各跑一遍（把内联函数抠出来执行 —— 只断言"字符串在不在"是测不出分支的）
+  const bridgeSource = /function describeBridge\(status\) \{[\s\S]*?\n\}/.exec(script)?.[0] ?? ''
+  const describeBridge = bridgeSource === '' ? null : new Function(`${bridgeSource}; return describeBridge`)()
+  const sample = (status) => (describeBridge ? describeBridge(status) : { label: '(没找到 describeBridge)', hint: '' })
+  check('★describeBridge 四个分支：宿主没跑 / 插件没加载 / 快照太旧 / 活跃',
+    describeBridge !== null
+    && sample({ ports: [{ name: 'host', listening: false }], config: { logs: { runtime: 'X.json' } } }).label.includes('宿主没跑')
+    && sample({ ports: [{ name: 'host', listening: true }], config: { logs: { runtime: 'X.json' } } }).label.includes('插件没加载')
+    && sample({ ports: [], runtime: { ageSeconds: 4000 }, config: { logs: { runtime: 'X.json' } } }).label.includes('分钟前')
+    && sample({ ports: [], runtime: { ageSeconds: 3 }, config: { logs: { runtime: 'X.json' } } }).alive === true
+    && sample({ ports: [], config: {} }).hint.includes('qq-runtime.json'),
+    sample({ ports: [], config: {} }).label)
+  // issue #2 的现场：用户按报错里的 "shimFile" 去文件夹翻了五小时。这两件事必须在界面上说清。
+  check('★配置卡片说清「填 launcher.bat 而不是 napcat.bat」与「垫片/日志在工作目录里现写」',
+    ui.includes('bootmain\\launcher.bat') && ui.includes('qq-napcat-launch.cmd')
+    && ui.includes('不在插件安装包里') && ui.includes('placeholder="…\\NapCat\\bootmain\\launcher.bat"'),
+    '配置卡片提示')
   check('面板有脚本错误自曝（面板也要可调试）', ui.includes('面板脚本错误') && script.includes('unhandledrejection'))
   check('面板支持静态模式（不建长连接）', script.includes("stream === '0'") || script.includes("get('stream')"))
 }

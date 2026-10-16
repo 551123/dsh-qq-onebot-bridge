@@ -7,7 +7,7 @@
  * to touch (see `assertKillAllowed`).
  */
 import { execFile, spawn } from 'node:child_process'
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PORT_LABELS, configWarnings } from './config.mjs'
@@ -125,13 +125,15 @@ export const QR_STALE_SECONDS = 300
  * 注意 `export … from` 不会在本地作用域建绑定，所以两件事都得写。
  */
 import {
-  NAPCAT_LOADER_NAMES, NAPCAT_LOADER_RE, QQ_CLIENT_RE, napcatLaunchCommand, napcatRestartCommand,
-  parseTasklist, pickNapcatLoaders, resolveNapcatLauncher,
+  NAPCAT_LAUNCH_LOG_FILE, NAPCAT_LOADER_NAMES, NAPCAT_LOADER_RE, NAPCAT_SHIM_FILE, QQ_CLIENT_RE,
+  fileMtime, napcatLaunchCommand, napcatLaunchLogPath, napcatRestartCommand, napcatShimPath,
+  parseTasklist, pickNapcatLoaders, resolveNapcatLauncher, shimHeartbeatFresh, writeNapcatShim,
 } from '../../lib/napcat-launch.js'
 
 export {
-  NAPCAT_LOADER_NAMES, NAPCAT_LOADER_RE, QQ_CLIENT_RE, napcatLaunchCommand, napcatRestartCommand,
-  parseTasklist, pickNapcatLoaders, resolveNapcatLauncher,
+  NAPCAT_LAUNCH_LOG_FILE, NAPCAT_LOADER_NAMES, NAPCAT_LOADER_RE, NAPCAT_SHIM_FILE, QQ_CLIENT_RE,
+  napcatLaunchCommand, napcatLaunchLogPath, napcatRestartCommand, napcatShimPath,
+  parseTasklist, pickNapcatLoaders, resolveNapcatLauncher, writeNapcatShim,
 }
 
 // ---------------------------------------------------------------- actions ----
@@ -231,6 +233,50 @@ export function fileExists(file, { exists = existsSync } = {}) {
   return Boolean(file) && exists(file)
 }
 
+/**
+ * 拉起**提权**命令用的子进程：**绝不能带 `detached`**（2026-10-16 真机实测，issue #2 的第二层原因）。
+ *
+ * 现象：这台机器上 `detached: true` 的 **powershell 子进程根本不执行**——退出码 0、没有任何输出、
+ * 垫片一行都没写；把同一个命令的 `detached` 去掉，垫片立刻跑起来（`control-unit` 里那条
+ * "垫片留下心跳才算成功"的断言就是这条路）。控制台原来用的是通用 `startDetached`（`detached: true`），
+ * 于是**就算垫片路径修好了，点「启动 NapCat」也只会得到一句"提权那一跳被拦下了"——诊断仍然是错的**。
+ *
+ * 顺带把 powershell 的输出收下来（与 DSH 面板的 `spawnDetachedProcess` 同一形状）：
+ * `QAI-ELEVATED` / `QAI-RUNAS` 说明走的是哪条分支，报错原文也能带回界面，而不是丢掉。
+ *
+ * 这里不需要 `detached`：提权那一跳由 AppInfo（RunAs）或 WmiPrvSE（WMI）拉起，
+ * **本来就脱离我们的进程树**——NapCat 不会因为控制台退出被带走。
+ */
+export function spawnElevated({ command, args = [], cwd, spawnImpl = spawn, waitMs = 8000 } = {}) {
+  if (!command) throw new Error('缺少可执行文件路径')
+  return new Promise((resolve) => {
+    let child = null
+    try {
+      child = spawnImpl(command, args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (error) {
+      resolve({ pid: 0, failed: true, code: -1, stdout: '', stderr: '', message: String(error?.message ?? error) })
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    child.stdout?.on?.('data', (chunk) => { stdout += String(chunk) })
+    child.stderr?.on?.('data', (chunk) => { stderr += String(chunk) })
+    const finish = (extra) => {
+      if (settled) return
+      settled = true
+      child.unref?.()
+      resolve({ pid: child.pid ?? 0, failed: false, code: null, stdout, stderr, ...extra })
+    }
+    child.once?.('error', (error) => finish({ failed: true, code: -1, message: String(error?.message ?? error) }))
+    child.once?.('exit', (code) => finish({ code: typeof code === 'number' ? code : -1 }))
+    // 超时也照常放行：命令可能还挂着（比如等 UAC / 等提权那一跳），我们只是不再等它。
+    // 单测里的假子进程不会发 `exit`，把 waitMs 调小即可（真机给 8 秒）。
+    const timer = setTimeout(() => finish({ code: null, timedOut: true }), Math.max(500, Number(waitMs) || 0))
+    timer.unref?.()
+  })
+}
+
 // ------------------------------------------------------------ supervisor ----
 
 /** Config fields the UI/API is allowed to read (no secrets live here anyway). */
@@ -319,25 +365,108 @@ export function createSupervisor(config, deps = {}) {
     return { ok: result.ok, reason: result.ok ? `宿主已停止（PID ${host.pid}）` : '停止失败' }
   }
 
+  /**
+   * 垫片脚本 / 启动日志的落点：**与控制台配置里那个工作目录一致**。
+   *
+   * 为什么必须是同一个文件（issue #2）：DSH 面板用的是同一份 `qq-control.json` 的 `cwd`，
+   * 两边各写一处就会出现"面板点了能起来、控制台点了说找不到垫片"。名字也共用常量。
+   */
+  const napcatShimDir = () => String(config.cwd ?? '').trim() || defaultPluginRoot()
+  const napcatShimFile = () => napcatShimPath(napcatShimDir())
+  const napcatLogFile = () => napcatLaunchLogPath(napcatShimDir())
+
+  /** 垫片心跳：`since` = 点击之前的日志 mtime（只有"这次新写进去的"心跳才算数）。 */
+  const shimRan = (logFile, since, withinMs = 60_000) => shimHeartbeatFresh(logFile, {
+    stat: deps.stat ?? statSync,
+    readFile: deps.readFile ?? readFileSync,
+    withinMs,
+    since,
+  })
+
+  /** 等垫片留下心跳：提权那一跳是被系统**悄悄**拦下的（powershell 退出码还是 0），只能靠日志判。 */
+  async function waitForShimRan(logFile, since, waitMs) {
+    const deadline = Date.now() + Math.max(0, Number(waitMs) || 0)
+    for (;;) {
+      if (shimRan(logFile, since)) return true
+      if (Date.now() >= deadline) return false
+      await new Promise((resolve) => { const timer = setTimeout(resolve, 400); timer.unref?.() })
+    }
+  }
+
+  /**
+   * 写垫片 → 提权执行 → **等心跳**。启动与重启登录共用（这两条路原来都漏了垫片路径）。
+   *
+   * 返回的 `ok` 只在**垫片真的跑起来**时才为 true：`6099 在听`不能当判据
+   * （NapCat 本来就在跑时它永远为真，真机上抓到过"界面报成功、其实什么都没发生"）。
+   */
+  async function runNapcatPlan({ plan, chosen }) {
+    const shimFile = plan.shim?.path ?? ''
+    const logFile = plan.logFile ?? napcatLogFile()
+    const written = writeNapcatShim(plan.shim, { writeFile: deps.writeFile ?? writeFileSync, ensureDir: deps.ensureDir })
+    if (written.ok !== true) {
+      return { ok: false, shimFile, logFile, reason: `写不了启动垫片 ${written.path}：${written.reason}` }
+    }
+    const since = fileMtime(logFile, { stat: deps.stat ?? statSync })
+    const result = await spawnElevated({
+      command: plan.command,
+      args: plan.args,
+      cwd: config.cwd || undefined,
+      spawnImpl,
+      waitMs: deps.elevatedWaitMs ?? 8000,
+    }).catch((error) => ({ failed: true, code: -1, stdout: '', stderr: '', message: String(error?.message ?? error) }))
+    const said = String(result.stdout ?? '').trim()
+    const complained = String(result.stderr ?? '').trim()
+    if (result.failed === true || (typeof result.code === 'number' && result.code !== 0)) {
+      const detail = (complained || said || result.message || '').split(/\r?\n/).filter(Boolean).slice(0, 3).join(' / ')
+      return {
+        ok: false,
+        pid: result.pid,
+        shimFile,
+        logFile,
+        reason: `启动命令没发出去（powershell 退出码 ${result.code}）${detail ? `：${detail}` : '，没有任何错误输出'}。`
+          + '请用**管理员身份**重开控制台，或手动右键"以管理员身份运行" launcher.bat。',
+      }
+    }
+    const ran = await waitForShimRan(logFile, since, deps.shimWaitMs ?? 8000)
+    // 实话实说：本机策略是"提权不提示"（ConsentPromptBehaviorAdmin=0），看不到 UAC 弹窗是正常的，
+    // 界面**不能**再让用户去点一个根本不会出现的窗口（旧文案就是这么写的）。
+    // 到底走的哪条分支由命令自己打的 QAI-ELEVATED / QAI-RUNAS 决定。
+    const branch = said.includes('QAI-ELEVATED') ? '当前控制台已是管理员，走 WMI 直接执行' : '已按提权方式拉起'
+    const noDialog = '本机策略是提权不提示，看不到 UAC 弹窗是正常的'
+    if (ran !== true) {
+      return {
+        ok: false,
+        pid: result.pid,
+        shimRan: false,
+        shimFile,
+        logFile,
+        reason: `启动命令已发出（${branch}；${noDialog}），但**启动脚本没有留下心跳**（垫片 ${shimFile}，日志 ${logFile}）——`
+          + '说明提权那一跳被系统拦下了，这次点击什么都没发生。'
+          + '请用**管理员身份**重开控制台（或手动右键"以管理员身份运行" launcher.bat）后再试。',
+      }
+    }
+    return {
+      ok: true,
+      pid: result.pid,
+      shimRan: true,
+      shimFile,
+      logFile,
+      reason: `已请求提权启动 NapCat（${String(chosen.path).split(/[\\/]/).pop()}）：垫片已执行（${branch}，日志：${logFile}）。`
+        + '等几秒扫码窗口就会出现；二维码也会显示在控制台/面板里'
+        + (chosen.switched ? `。注意：${chosen.reason}` : ''),
+    }
+  }
+
   async function startNapcat() {
     // 先用共享的挑选逻辑：配置里常常写的是 napcat.bat（这版只是拉起加载器 + pause，实测秒退），
     // 同目录的 launcher.bat 才是真正干活的（设 NAPCAT_* 环境变量、从注册表找 QQ.exe）。
     const chosen = resolveNapcatLauncher(config.napcatBat, { exists: (file) => fileExists(file, deps) })
     if (chosen.ok !== true) return { ok: false, reason: chosen.reason }
-    const plan = napcatLaunchCommand(chosen.path)
-    if (plan.ok !== true) return { ok: false, reason: plan.reason }
-    try {
-      const { pid } = startDetached({ command: plan.command, args: plan.args, cwd: config.cwd || undefined, spawnImpl })
-      // 旧实现跑的是 napcat.bat（无参数、不提权），实测秒退什么都不做；提示里把该做的事说清楚。
-      return {
-        ok: true,
-        pid,
-        reason: `已请求提权启动 NapCat（${chosen.path.split(/[\\/]/).pop()}）：请在 UAC 弹窗点「是」，二维码刷新后 2 分钟内扫掉`
-          + (chosen.switched ? `。注意：${chosen.reason}` : ''),
-      }
-    } catch (error) {
-      return { ok: false, reason: `启动失败：${error.message}` }
-    }
+    // **必须把垫片路径与日志路径传进去**（原来一个都没传 ⇒ 每次点击都只会回一句
+    // "缺少垫片脚本路径（shimFile）"，用户拿着这个名字在安装目录里翻是翻不到的，见 issue #2）。
+    const planned = napcatLaunchCommand(chosen.path, { shimFile: napcatShimFile(), logFile: napcatLogFile(), qrFile: config.napcatQr ?? '' })
+    if (planned.ok !== true) return { ok: false, reason: planned.reason }
+    return runNapcatPlan({ plan: planned, chosen })
   }
 
   /**
@@ -367,15 +496,15 @@ export function createSupervisor(config, deps = {}) {
         reason: `没有检测到 NapCat 加载器进程（${NAPCAT_LOADER_NAMES.join(' / ')}），拒绝执行：按进程名杀 QQ 会连你自己开的 QQ 一起杀掉。请改用「启动 NapCat」，或在任务管理器里结束 NapCatWinBootMain.exe 后再启动`,
       }
     }
-    const plan = napcatRestartCommand(chosen.path, loaders.map((entry) => entry.pid))
+    const plan = napcatRestartCommand(chosen.path, loaders.map((entry) => entry.pid), {
+      shimFile: napcatShimFile(), logFile: napcatLogFile(), qrFile: config.napcatQr ?? '',
+    })
     if (plan.ok !== true) return { ok: false, reason: plan.reason }
-    try {
-      const { pid } = startDetached({ command: plan.command, args: plan.args, cwd: config.cwd || undefined, spawnImpl })
-      const names = loaders.map((entry) => `${entry.name ?? 'napcat'}#${entry.pid}`).join('、')
-      return { ok: true, pid, reason: `已请求提权重启登录流程：只结束 ${names}（连同其子进程），不会碰你自己的 QQ。UAC 点「是」后等二维码刷新，2 分钟内扫掉` }
-    } catch (error) {
-      return { ok: false, reason: `重启失败：${error.message}` }
-    }
+    // 与「启动 NapCat」同一条路：写垫片 → 提权执行 → 等心跳（这里原来也漏了 shimFile）。
+    const outcome = await runNapcatPlan({ plan, chosen })
+    if (outcome.ok !== true) return outcome
+    const names = loaders.map((entry) => `${entry.name ?? 'napcat'}#${entry.pid}`).join('、')
+    return { ...outcome, reason: `${outcome.reason}；本次只结束了 ${names}（连同其子进程），不会碰你自己的 QQ` }
   }
 
   /**
