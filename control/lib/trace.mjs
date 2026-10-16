@@ -31,15 +31,27 @@ export function readTraceFile(file, { maxBytes = 2 * 1024 * 1024, readFile = rea
   return parseTraceLines(text)
 }
 
-/** Incremental tailer: only the bytes appended since the last poll are parsed. */
-export function createTraceTailer(file, { initialBytes = 256 * 1024 } = {}) {
+/**
+ * Incremental tailer: only the bytes appended since the last poll are parsed.
+ *
+ * `initialEvents`（2026-10-16 真机事故）：首轮**最多**给最近这么多条。
+ * 原来只按 `initialBytes`（256 KiB）截，于是一个 254 KiB 的 trace 文件会在**一次轮询里**
+ * 被当成 1180 条事件推给浏览器 —— 控制台前端当时是"来一条重绘一次"，直接把渲染进程压到
+ * 「此页面没有响应」。按条数封顶 + 前端合并重绘（见 control/ui.html 的 scheduleStreamRender）
+ * 两头都要收，只收一头另一头照样能被喂爆。
+ *
+ * 显式要历史仍然走 `/api/trace?limit=…`（那条路是 `readTraceFile`，与本 tailer 无关）。
+ */
+export function createTraceTailer(file, { initialBytes = 256 * 1024, initialEvents = 300 } = {}) {
   let offset = -1
   let inode = ''
   let skipPartial = false
+  let firstPoll = true
   return {
     /**
      * @returns {object[]} events appended since the previous poll; the first poll
-     *   returns the recent tail (up to `initialBytes`) so a fresh client is not blind.
+     *   returns the recent tail (up to `initialBytes`, at most `initialEvents` items)
+     *   so a fresh client is not blind.
      */
     poll() {
       let stat
@@ -71,9 +83,15 @@ export function createTraceTailer(file, { initialBytes = 256 * 1024 } = {}) {
         text = firstNewline < 0 ? '' : text.slice(firstNewline + 1)
         skipPartial = false
       }
-      return parseTraceLines(text)
+      const events = parseTraceLines(text)
+      if (firstPoll) {
+        firstPoll = false
+        // 首轮只保留**最近**的若干条（老的先不看，反正界面上也只显示最近 300 条）。
+        return initialEvents > 0 && events.length > initialEvents ? events.slice(-initialEvents) : events
+      }
+      return events
     },
-    reset() { offset = -1; inode = ''; skipPartial = false },
+    reset() { offset = -1; inode = ''; skipPartial = false; firstPoll = true },
   }
 }
 

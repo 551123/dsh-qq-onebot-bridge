@@ -1,5 +1,41 @@
 # 更新日志 / Changelog
 ## v0.6 系列 —— 轻量化设计 / Lightweight
+### v0.6.6（2026-10-16）— 调试台不再卡死 / Console no longer freezes
+
+用户报（原话）：「这个启动调试窗有BUG，启动完以后就是个页面没法进行任何互动」——
+浏览器弹「此页面没有响应」。两层原因，一头一尾都得收：
+
+#### 修复
+
+- **服务端：一次连接就把整份 trace 当事件灌出去**。`/api/stream` 每条连接都新建 tailer，
+  而 tailer 的首轮是**按字节**截的（256 KiB）——本机 254 KiB 的 trace 文件 = **3 秒内 1180 条事件**。
+  现在首轮按**条数**封顶（最近 300 条，`createTraceTailer({ initialEvents })`）；
+  显式要历史仍然走 `/api/trace?limit=…`（那条路本来就有上限）。
+- **前端：来一条就重绘一次整张表**。`onmessage` 里原来是 `renderStream() + updateErrPill()`，
+  而 `renderStream()` 会把至多 400 行整表 `innerHTML` 重建一遍 ⇒ 1180 次重绘把渲染进程按死，
+  页面自然是"点不动"。现在**合并重绘**（`scheduleStreamRender`）：无论多快进来多少条，
+  **最多每 250ms 画一次**，一次突发 = 一次重绘。
+  实测同一份 trace：服务端 **1180 条 / 263 KB → 303 条 / 68 KB**，前端重绘 **1180 次 → 1 次**。
+- **桌面端「调试台」不再多开一个 Electron 实例**（同一个功能里的错误用法）：
+  桌面端的 `process.execPath` 是 **Electron 本体**，原来直接拿它去跑 `control/bin/qq-control.mjs`，
+  等于把这支脚本当成**一个 Electron 应用的入口**（真机实测：控制台进程命令行就是
+  `"…\DeepSeek Harness.exe" …\control\bin\qq-control.mjs`，`Get-Process` 里显示成 DeepSeek Harness、
+  占 126 MB）。按官方文档（Environment Variables → `ELECTRON_RUN_AS_NODE`：
+  "Starts the process as a normal Node.js process."）在拉起时补这个变量；CLI 宿主
+  （`node bin.js web`，`process.execPath` 本来就是 node.exe）**不补**，行为不变。
+  本机实测该 fuse 是开的（子进程报 `electron=44.0.0 node=24.18.1`，控制台照常监听端口）；
+  注入的 env **只追加**，宿主原有的环境变量一个不少。
+
+#### 测试
+
+- `console-debug-unit` 72 → **78**：tailer 首轮按条数封顶（900 条的文件只给最近 300 条、且是**最新**那批）、
+  封顶只作用于首轮（之后照常增量、不丢新事件）、`initialEvents: 0` 能显式放开；
+  并把面板脚本里的 `scheduleStreamRender` 抠出来**真跑一遍**——同步阶段 0 次重绘、250ms 后合并成 1 次。
+- `settings-unit` 189 → **193**：桌面端补 `ELECTRON_RUN_AS_NODE`（CLI 宿主不补）、
+  后台拉起注入的 env 只追加（宿主变量一个不少）、不传 env 时不塞 `env` 字段。
+- 全量 **57 套 / 3891 断言全绿**；真机复验：重启控制台后同一条 SSE 从 1180 条降到 303 条，
+  页面里的合并重绘已生效。
+
 ### v0.6.5（2026-10-16）— NapCat 启动链路修复 / NapCat launch path fixed
 
 用户报（issue #2，原话）：「我在小鲸鱼工作台里填了那个脚本，又说缺少垫片脚本路径(shimFile)，

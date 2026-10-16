@@ -634,6 +634,21 @@ function setConnOk(ok, detail = '') {
   pill.style.display = ok ? 'none' : '';
   pill.textContent = ok ? '' : '⚠️ 面板连接失败，重试中' + (detail ? `（${detail}）` : '');
 }
+/**
+ * 事件流的**合并重绘**（2026-10-16 真机事故：「启动完以后就是个页面没法进行任何互动」，
+ * 浏览器弹「此页面没有响应」）。
+ *
+ * 原来 `onmessage` 里是"来一条就 renderStream() + updateErrPill()"，而 renderStream 会把
+ * 至多 400 行整表 innerHTML 重建一遍。SSE 一接上时服务端会补推最近的 trace（那次实测
+ * **1180 条 / 3 秒**），于是渲染进程要连着重建一千多次表格 ⇒ 主线程锁死、整页点不动。
+ * 现在攒着一起画：无论多快进来多少条，**最多每 250ms 重绘一次**（一次突发 = 一次重绘）。
+ */
+const STREAM_RENDER_MS = 250;
+let streamRenderPending = null;
+function scheduleStreamRender() {
+  if (streamRenderPending !== null) return;
+  streamRenderPending = setTimeout(() => { streamRenderPending = null; renderStream(); updateErrPill(); }, STREAM_RENDER_MS);
+}
 function startStream() {
   if (streamMode === 'off') {
     document.getElementById('streamMeta').textContent = '（静态模式：实时流已关闭，点「刷新」看最近事件）';
@@ -646,8 +661,7 @@ function startStream() {
       const event = JSON.parse(message.data);
       streamEvents.push(event);
       if (streamEvents.length > 2000) streamEvents = streamEvents.slice(-1500);
-      renderStream();
-      updateErrPill();
+      scheduleStreamRender();
     } catch { /* ignore */ }
   };
   source.onerror = () => { /* 浏览器会自动重连 */ };

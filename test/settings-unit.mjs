@@ -21,7 +21,7 @@ import {
 import { detectNapcatBat, planNapcatAction } from '../lib/napcat-launch.js'
 import {
   argvProfile, consoleLaunchPlan, consoleStartCommand, mountQqAiPanel, napcatWebUiUrl, panelLinkSources, probePort, profileDirOf,
-  redactSecrets, resolveProfile, sameSiteGuard, shimHeartbeatFresh, spawnDetachedProcess,
+  redactSecrets, resolveProfile, sameSiteGuard, shimHeartbeatFresh, spawnBackgroundProcess, spawnDetachedProcess,
 } from '../lib/settings-routes.js'
 import { Config } from '../lib/index.js'
 
@@ -548,7 +548,7 @@ const mountConsole = (running, { flipAfter = 0, withEntry = true } = {}) => {
     probe: async () => { probes += 1; return flipAfter > 0 && probes > flipAfter ? true : running },
     exists: (file) => (withEntry || !String(file).endsWith('qq-control.mjs')),
     consoleWaitMs: flipAfter > 0 ? 1200 : 0,
-    spawnBackground: ({ command, args, cwd }) => { spawns.push({ command, args, cwd }); return { pid: 4321 } },
+    spawnBackground: ({ command, args, cwd, env }) => { spawns.push({ command, args, cwd, env }); return { pid: 4321 } },
   })
   return { routes: seen, spawns }
 }
@@ -563,6 +563,16 @@ const mountConsole = (running, { flipAfter = 0, withEntry = true } = {}) => {
   const missing = consoleLaunchPlan({ root: join(fakeRoot, 'nope'), exists: () => false })
   check('consoleLaunchPlan：入口不存在时明确拒绝（不假装能起）',
     missing.ok === false && missing.reason.includes('找不到控制台入口'), brief(missing))
+  /**
+   * ★ 2026-10-16 真机抓到：**桌面端的 `process.execPath` 是 Electron 本体**，直接拿它跑 .mjs
+   *   会被当成"一个 Electron 应用的入口"再开一个完整实例（实测控制台进程的命令行就是
+   *   `"…\DeepSeek Harness.exe" …\qq-control.mjs`）。官方文档的解法是 `ELECTRON_RUN_AS_NODE`。
+   */
+  check('consoleLaunchPlan：桌面端（Electron）补 ELECTRON_RUN_AS_NODE=1，不再开第二个 Electron 实例',
+    consoleLaunchPlan({ root: fakeRoot, execPath: 'D:\\app\\DeepSeek Harness.exe', exists: () => true, electron: true }).env?.ELECTRON_RUN_AS_NODE === '1',
+    brief(consoleLaunchPlan({ root: fakeRoot, execPath: 'D:\\app\\DeepSeek Harness.exe', exists: () => true, electron: true }).env))
+  check('consoleLaunchPlan：CLI 宿主（真 node.exe）不补这个变量',
+    consoleLaunchPlan({ root: fakeRoot, execPath: 'C:\\node\\node.exe', exists: () => true, electron: false }).env === null)
 }
 
 // ② 没在跑 + 拉得起来 ⇒ 直接 302 进去（这就是"一键拉起"）
@@ -577,6 +587,27 @@ const mountConsole = (running, { flipAfter = 0, withEntry = true } = {}) => {
     && startable.spawns.length === 1
     && String(startable.spawns[0].args[0]).endsWith('qq-control.mjs') && startable.spawns[0].cwd === fakeRoot,
     `status=${autoRes.out.status} spawns=${startable.spawns.length}`)
+  /**
+   * `spawnBackgroundProcess` 只**追加**注入的 env（不能覆盖宿主环境，否则 PATH/代理/DSH_* 全丢）。
+   */
+  {
+    const seen = []
+    const spawned = spawnBackgroundProcess({
+      command: 'D:\\app\\DeepSeek Harness.exe', args: ['x.mjs'], cwd: fakeRoot,
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      spawnImpl: (command, args, options) => { seen.push(options); return { pid: 1, unref() {} } },
+    })
+    // 注意：宿主环境**本身可能就带着** ELECTRON_RUN_AS_NODE（DSH 给工具子进程设过），
+    // 所以判据是"宿主原有的键一个不少 + 我们的键被设上"，不是"键数 +1"。
+    const missing = Object.keys(process.env).filter((key) => !(key in (seen[0].env ?? {})))
+    check('★后台拉起把 env 合并进宿主环境（宿主变量一个不少，只追加）',
+      spawned.pid === 1 && seen[0].env?.ELECTRON_RUN_AS_NODE === '1' && missing.length === 0
+      && seen[0].windowsHide === true && seen[0].detached === undefined,
+      brief({ missing, merged: Object.keys(seen[0].env ?? {}).length }))
+    const noEnv = []
+    spawnBackgroundProcess({ command: 'node.exe', args: ['x.mjs'], spawnImpl: (command, args, options) => { noEnv.push(options); return { pid: 2, unref() {} } } })
+    check('不传 env 时不塞 env 字段（走宿主默认环境）', noEnv[0].env === undefined, brief(Object.keys(noEnv[0])))
+  }
 }
 
 // ③ 拉起后端口一直不通 ⇒ 如实说明（页面与 JSON 都带原因）

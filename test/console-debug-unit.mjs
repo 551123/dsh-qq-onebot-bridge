@@ -63,6 +63,28 @@ check('tailer 处理文件轮转（变小）', rotated.some((item) => item.id ==
 appendFileSync(liveFile, `${JSON.stringify(event({ id: 't-3', stage: 'reply' }))}\n`, 'utf8')
 check('tailer 轮转后继续增量', tailer.poll().length === 1)
 
+/**
+ * ★ 2026-10-16 真机事故：**首轮不能把整个文件一次推完**。
+ * 现场：254 KiB 的 trace 被当成 1180 条事件在 3 秒内灌给浏览器，前端当时"来一条重绘一次"，
+ * 直接把渲染进程压到「此页面没有响应」。现在首轮按**条数**封顶（最近 300 条）。
+ */
+{
+  const bigFile = join(dir, 'big.jsonl')
+  const total = 900
+  writeFileSync(bigFile, Array.from({ length: total }, (_, index) => JSON.stringify(event({ ts: now + index, id: `big-${index}`, stage: 'inbound' }))).join('\n') + '\n', 'utf8')
+  const bigTailer = createTraceTailer(bigFile)
+  const burst = bigTailer.poll()
+  check('★tailer 首轮按条数封顶（900 条的文件不会一次灌 900 条）',
+    burst.length === 300 && burst[burst.length - 1].id === `big-${total - 1}`,
+    `${burst.length} 条，末条 ${burst[burst.length - 1]?.id}`)
+  appendFileSync(bigFile, `${JSON.stringify(event({ id: 'big-new', stage: 'reply' }))}\n`, 'utf8')
+  const afterBurst = bigTailer.poll()
+  check('封顶只作用于首轮，之后照常增量（不会丢新事件）',
+    afterBurst.length === 1 && afterBurst[0].id === 'big-new', JSON.stringify(afterBurst.map((e) => e.id)))
+  check('initialEvents 可显式放开（要全量时仍然给得出）',
+    createTraceTailer(bigFile, { initialEvents: 0 }).poll().length === total + 1)
+}
+
 // ------------------------------------------------------------ filtering -----
 check('按 level 过滤', filterEvents(sample.map((line) => JSON.parse(line)), { level: 'error' }).length === 1)
 check('按 stage 过滤', filterEvents(sample.map((line) => JSON.parse(line)), { stage: 'inbound' }).length === 3)
@@ -263,6 +285,25 @@ server.close()
     ui.includes('bootmain\\launcher.bat') && ui.includes('qq-napcat-launch.cmd')
     && ui.includes('不在插件安装包里') && ui.includes('placeholder="…\\NapCat\\bootmain\\launcher.bat"'),
     '配置卡片提示')
+  /**
+   * ★ 2026-10-16 真机事故（「启动完以后就是个页面没法进行任何互动」）：
+   * 事件流必须**合并重绘**——把函数抠出来真跑一遍：连喂 1180 条只能触发 1 次重绘。
+   */
+  const scheduleSource = /function scheduleStreamRender\(\) \{[\s\S]*?\n\}/.exec(script)?.[0] ?? ''
+  check('★事件流用 scheduleStreamRender 合并重绘（onmessage 里不再直接 renderStream）',
+    scheduleSource !== '' && script.includes('scheduleStreamRender()') && script.includes('const STREAM_RENDER_MS = 250')
+    && !/source\.onmessage[\s\S]{0,400}renderStream\(\);/.test(script),
+    `scheduleStreamRender=${scheduleSource.length} 字符`)
+  if (scheduleSource !== '') {
+    let renders = 0
+    const schedule = new Function('renderStream', 'updateErrPill',
+      `const STREAM_RENDER_MS = 250; let streamRenderPending = null; ${scheduleSource}; return scheduleStreamRender`)(
+      () => { renders += 1 }, () => {})
+    for (let index = 0; index < 1180; index += 1) schedule()
+    check('★喂 1180 条时同步阶段一次都不重绘（攒着一起画）', renders === 0, `同步阶段 ${renders} 次`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    check('★250ms 后 1180 条合并成 1 次重绘（原来 = 1180 次整表 innerHTML）', renders === 1, `${renders} 次`)
+  }
   check('面板有脚本错误自曝（面板也要可调试）', ui.includes('面板脚本错误') && script.includes('unhandledrejection'))
   check('面板支持静态模式（不建长连接）', script.includes("stream === '0'") || script.includes("get('stream')"))
 }
