@@ -1,6 +1,6 @@
 # 更新日志 / Changelog
 ## v0.6 系列 —— 轻量化设计 / Lightweight
-### v0.6.7（2026-10-16）— 面板可以改数值了 / Numbers you can finally edit
+### v0.6.7（2026-10-16）— 可自定义数值 / Configurable numbers
 
 这版做两件事：**面板从"只能开关"扩到"能改数值"**，以及把文案里一直说"去配置里改"的那些阈值做成控件。
 
