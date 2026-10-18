@@ -77,6 +77,23 @@ window.__ModuleLoader__.load({
 .qqai-qr-side{display:flex;flex-direction:column;gap:6px;font-size:12px}
 .qqai-qr-title{font-weight:600;color:var(--dsw-alias-label-primary,#111)}
 .qqai-action:disabled{cursor:default;opacity:.5}
+/* 数值控件（v0.6.7）：风控阈值这类"数字"，不要再让用户去手改 YAML。
+   观感对齐平台：细边框 + 主题 token，−/+ 与输入框同高。
+   输入框必须关掉原生上下箭头（Chromium 的 ::-webkit-inner/outer-spin-button）：
+   我们两边已经有 −/+ 了，那个又小又难点，纯属重复，视觉上也脏（用户 2026-10-17：「右边的上下控制层
+   感觉没必要啊，而且还不方便，影响美观」）。appearance:textfield 是 Firefox 的写法，一并带上。
+   注意：这段是 JS 模板字符串里的 CSS，注释里不能出现反引号（会把模板提前闭合），
+   也不要写 markdown 的星号强调——<style> 的文本会被浅渲染测试当成页面文字收进去。 */
+.qqai-num{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.qqai-num-btn{width:26px;height:24px;padding:0;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:inherit;font-size:14px;line-height:1;cursor:pointer}
+.qqai-num-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2,#f6f7f9)}
+.qqai-num-btn:disabled{cursor:default;opacity:.4}
+.qqai-num-input{width:60px;height:24px;box-sizing:border-box;padding:0 6px;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:inherit;font-size:12px;text-align:center;-moz-appearance:textfield;appearance:textfield}
+.qqai-num-input::-webkit-outer-spin-button,.qqai-num-input::-webkit-inner-spin-button{-webkit-appearance:none;appearance:none;margin:0}
+.qqai-num-input:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary,#2563eb));outline-offset:1px}
+.qqai-unit{font-size:11px;color:var(--dsw-alias-label-secondary,#6b7280);white-space:nowrap}
+/* 「开关 + 数值」合并行右侧那一组：开关与数字并排（中间留 10px，别让它们粘在一起）。 */
+.qqai-row-ctl{display:flex;align-items:center;gap:10px;flex:0 0 auto}
 .qqai-state{font-size:11px}
 .qqai-state.on{color:var(--dsw-alias-state-success-primary,#15803d)}
 .qqai-state.off{color:var(--dsw-alias-state-warn-primary,#b45309)}
@@ -105,7 +122,79 @@ window.__ModuleLoader__.load({
       return parts.map((part, index) => (index % 2 === 1 ? h('b', { key: index }, part) : part))
     }
 
-    function Row({ row, busy, onToggle }) {
+    /**
+     * 开关本体（布尔行与「开关 + 数值」合并行共用一份，别各写一遍）。
+     * 语义与视觉都挂在 aria-checked 上（与官方 Switch 一致）。
+     */
+    function SwitchControl({ on, busy, label, onChange }) {
+      return h('button', {
+        className: 'qqai-switch',
+        role: 'switch',
+        'aria-checked': on ? 'true' : 'false',
+        disabled: busy === true,
+        title: on ? '点一下关闭' : '点一下开启',
+        'aria-label': `${label}：${on ? '开' : '关'}`,
+        onClick: () => onChange(!on),
+      }, h('span', { className: 'qqai-knob' }))
+    }
+
+    /**
+     * 数值本体（`−` / 输入框 / `+`）：数值行与「开关 + 数值」合并行共用。
+     *
+     * 三条规矩：
+     *   ① **范围来自服务端**（`spec.min/max/step`，由 schema 现读）——界面只做夹取，不做"我猜能被接受"的判断；
+     *      真正的校验在 `POST /qqai/panel/set`，越界/小数会被 400 拒掉并说明范围。
+     *   ② 输入过程中**不写**，回车 / 失焦 / 点 ± 才写一次（每敲一个字符就写配置，会把 patch 写烂）。
+     *   ③ 写到一半的非法输入（空、`--`、超范围）回滚成上一个生效值，不弹一堆错。
+     */
+    function NumberControl({ spec, busy, label, onCommit }) {
+      const min = Number.isFinite(spec.min) ? spec.min : null
+      const max = Number.isFinite(spec.max) ? spec.max : null
+      const step = Number.isFinite(spec.step) && spec.step > 0 ? spec.step : 1
+      const clamp = (raw) => {
+        const num = Number(raw)
+        if (!Number.isFinite(num)) return null
+        let next = Math.round(num / step) * step
+        if (min !== null && next < min) next = min
+        if (max !== null && next > max) next = max
+        return next
+      }
+      const [draft, setDraft] = React.useState(String(spec.value ?? ''))
+      // 服务端把新值推回来之后（保存成功 / 别的窗口改了），输入框跟着生效值走。
+      React.useEffect(() => { setDraft(String(spec.value ?? '')) }, [spec.value])
+      const commit = (raw) => {
+        const next = clamp(raw)
+        if (next === null) { setDraft(String(spec.value ?? '')); return }
+        setDraft(String(next))
+        if (next !== Number(spec.value)) onCommit(next)
+      }
+      return h('div', { className: 'qqai-num' },
+        h('button', {
+          className: 'qqai-num-btn', type: 'button', disabled: busy === true,
+          title: `减 ${step}${min !== null ? `（最小 ${min}）` : ''}`, 'aria-label': `${label}：减`,
+          onClick: () => commit(Number(spec.value) - step),
+        }, '−'),
+        h('input', {
+          className: 'qqai-num-input', type: 'number', inputMode: 'numeric',
+          min, max, step, value: draft, disabled: busy === true,
+          'aria-label': label,
+          onChange: (event) => setDraft(event.target.value),
+          onBlur: (event) => commit(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') commit(event.target.value)
+            if (event.key === 'Escape') setDraft(String(spec.value ?? ''))
+          },
+        }),
+        h('button', {
+          className: 'qqai-num-btn', type: 'button', disabled: busy === true,
+          title: `加 ${step}${max !== null ? `（最大 ${max}）` : ''}`, 'aria-label': `${label}：加`,
+          onClick: () => commit(Number(spec.value) + step),
+        }, '+'),
+        spec.unit ? h('span', { className: 'qqai-unit' }, spec.unit) : null)
+    }
+
+    /** 布尔行：左边标签+说明，右边一个开关。 */
+    function Row({ row, busy, onSet }) {
       const on = row.value === true
       return h('div', { className: 'qqai-row' },
         h('div', { className: 'qqai-text' },
@@ -123,16 +212,77 @@ window.__ModuleLoader__.load({
             row.needs ? h('span', { className: 'qqai-need', title: '这个功能要额外准备的东西' }, row.needs) : null),
           row.hint ? h('span', { className: 'qqai-hint', title: row.hint }, richText(row.hint)) : null,
           h('span', { className: 'qqai-key' }, row.key)),
-        h('button', {
-          className: 'qqai-switch',
-          // 与官方 Switch 一致：语义与视觉都挂在 aria-checked 上（不再用自定义 data-on）。
-          role: 'switch',
-          'aria-checked': on ? 'true' : 'false',
-          disabled: busy === true,
-          title: on ? '点一下关闭' : '点一下开启',
-          'aria-label': `${row.label}：${on ? '开' : '关'}`,
-          onClick: () => onToggle(row.key, !on),
-        }, h('span', { className: 'qqai-knob' })))
+        h(SwitchControl, { on, busy, label: row.label, onChange: (next) => onSet(row.key, next) }))
+    }
+
+    /**
+     * 数值行（v0.6.7）：`−` / 输入框 / `+`。
+     *
+     * 三条规矩：
+     *   ① **范围来自服务端**（`row.min/max/step`，由 schema 现读）——界面只做夹取，不做"我猜能被接受"的判断；
+     *      真正的校验在 `POST /qqai/panel/set`，越界/小数会被 400 拒掉并说明范围。
+     *   ② 输入过程中**不写**，回车 / 失焦 / 点 ± 才写一次（每敲一个字符就写配置，会把 patch 写烂）。
+     *   ③ 写到一半的非法输入（空、`--`、超范围）回滚成上一个生效值，不弹一堆错。
+     */
+    /** 数值行：左边标签+说明，右边 `− n +`（控件本体见 NumberControl）。 */
+    function NumberRow({ row, busy, onSet }) {
+      const min = Number.isFinite(row.min) ? row.min : null
+      const max = Number.isFinite(row.max) ? row.max : null
+      const range = min !== null && max !== null ? `${min}–${max}` : (min !== null ? `≥ ${min}` : (max !== null ? `≤ ${max}` : ''))
+      return h('div', { className: 'qqai-row' },
+        h('div', { className: 'qqai-text' },
+          h('label', { className: 'qqai-label' }, row.label,
+            row.pending === true ? h('span', { className: 'qqai-badge', title: '配置文件里的值与当前生效值不一致' }, '待重启') : null,
+            row.defaultValue !== null && row.defaultValue !== undefined
+              ? h('span', {
+                className: 'qqai-need',
+                title: `出厂默认：${row.defaultValue}${row.unit ? ' ' + row.unit : ''} · 当前：${row.value}${row.unit ? ' ' + row.unit : ''}`
+                  + (row.nonDefault === true ? '（你改过）' : '（与出厂一致）')
+                  + (range ? ` · 范围：${range}` : ''),
+              }, `默认：${row.defaultValue}${row.unit ? ' ' + row.unit : ''}`)
+              : null,
+            row.needs ? h('span', { className: 'qqai-need', title: '这个功能要额外准备的东西' }, row.needs) : null),
+          row.hint ? h('span', { className: 'qqai-hint', title: row.hint }, richText(row.hint)) : null,
+          h('span', { className: 'qqai-key' }, range ? `${row.key}（${range}）` : row.key)),
+        h(NumberControl, { spec: row, busy, label: row.label, onCommit: (next) => onSet(row.key, next) }))
+    }
+
+    /**
+     * 「开关 + 数值」合并行（v0.6.7，用户 2026-10-17：「你这两个怎么不合并在一起」）：
+     * 开关是总闸、数值是它的阈值，**同一行**里左右并排——不用再上下对照谁管谁。
+     * 两个键各自独立写（点开关写布尔、改数字写数值），服务端一次只收一个键。
+     */
+    function SwitchNumberRow({ row, busy, onSet }) {
+      const on = row.value === true
+      const num = row.number ?? {}
+      const min = Number.isFinite(num.min) ? num.min : null
+      const max = Number.isFinite(num.max) ? num.max : null
+      const range = min !== null && max !== null ? `${min}–${max}` : ''
+      const numDefault = num.defaultValue !== null && num.defaultValue !== undefined
+        ? `${num.defaultValue}${num.unit ? ' ' + num.unit : ''}`
+        : ''
+      return h('div', { className: 'qqai-row' },
+        h('div', { className: 'qqai-text' },
+          h('label', { className: 'qqai-label' }, row.label,
+            row.pending === true || num.pending === true
+              ? h('span', { className: 'qqai-badge', title: '配置文件里的值与当前生效值不一致' }, '待重启')
+              : null,
+            row.defaultValue === true || row.defaultValue === false
+              ? h('span', {
+                className: 'qqai-need',
+                title: `出厂默认：${row.defaultValue === true ? '开' : '关'} · 当前：${on ? '开' : '关'}`
+                  + (row.nonDefault === true ? '（你改过）' : '（与出厂一致）'),
+              }, `默认：${row.defaultValue === true ? '开' : '关'}`)
+              : null,
+            numDefault !== ''
+              ? h('span', { className: 'qqai-need', title: `${num.label}出厂默认 ${numDefault}${range ? ` · 范围 ${range}` : ''}` }, `数值默认：${numDefault}`)
+              : null,
+            row.needs ? h('span', { className: 'qqai-need', title: '这个功能要额外准备的东西' }, row.needs) : null),
+          row.hint ? h('span', { className: 'qqai-hint', title: row.hint }, richText(row.hint)) : null,
+          h('span', { className: 'qqai-key' }, `${row.key} + ${num.key ?? '?'}${range ? `（${range}）` : ''}`)),
+        h('div', { className: 'qqai-row-ctl' },
+          h(SwitchControl, { on, busy, label: row.label, onChange: (next) => onSet(row.key, next) }),
+          h(NumberControl, { spec: num, busy, label: num.label || row.label, onCommit: (next) => onSet(num.key, next) })))
     }
 
     /**
@@ -266,9 +416,16 @@ window.__ModuleLoader__.load({
             : null))
     }
 
-    function Group({ group, busy, onToggle }) {
+    function Group({ group, busy, onSet }) {
       const note = group.note ? h('div', { className: 'qqai-note' }, richText(group.note)) : null
-      const body = h('div', null, note, group.rows.map((row) => h(Row, { key: row.key, row, busy, onToggle })))
+      // 三种行混排：布尔 / 数值 / 「开关 + 数值」合并行，按 `row.type` 分派（服务端载荷里都带 type）。
+      const body = h('div', null, note, group.rows.map((row) => (
+        row.type === 'switchNumber'
+          ? h(SwitchNumberRow, { key: row.key, row, busy, onSet })
+          : row.type === 'number'
+            ? h(NumberRow, { key: row.key, row, busy, onSet })
+            : h(Row, { key: row.key, row, busy, onSet })
+      )))
       if (group.advanced !== true) {
         return h('div', { className: 'qqai-group' },
           h('div', { className: 'qqai-group-head', style: { padding: '10px 12px', fontWeight: 600, background: 'var(--dsw-alias-bg-layer-2,#f6f7f9)' } }, group.title),
@@ -325,13 +482,15 @@ window.__ModuleLoader__.load({
         setState((prev) => ({ ...prev, busyKey: key, error: '', flash: '' }))
         try {
           const result = await callJson('/qqai/panel/set', { method: 'POST', body: JSON.stringify({ key, value }) })
+          // 布尔行说"开/关"，数值行说"→ 7"（同一个 setter，两种显示）。
+          const shown = typeof value === 'number' ? String(value) : (value ? '开' : '关')
           setState({
             status: 'ready',
             data: result.panel ?? state.data,
             busyKey: '',
             busyAction: '',
             error: '',
-            flash: `${key} → ${value ? '开' : '关'}${result.changed === true ? '（已写入配置）' : '（无需改动）'}${result.note ? ' · ' + result.note : ''}`,
+            flash: `${key} → ${shown}${result.changed === true ? '（已写入配置）' : '（无需改动）'}${result.note ? ' · ' + result.note : ''}`,
           })
         } catch (error) {
           setState((prev) => ({ ...prev, busyKey: '', error: `写入失败：${String(error?.message ?? error)}` }))
@@ -428,7 +587,7 @@ window.__ModuleLoader__.load({
         state.flash ? h('div', { className: 'qqai-flash' }, state.flash) : null,
         state.error ? h('div', { className: 'qqai-err' }, state.error) : null,
         (Array.isArray(data.warnings) ? data.warnings : []).map((text, index) => h('div', { key: `warn-${index}`, className: 'qqai-warn' }, `⚠️ ${text}`)),
-        data.groups.map((group) => h(Group, { key: group.id, group, busy: state.busyKey !== '', onToggle: toggle })),
+        data.groups.map((group) => h(Group, { key: group.id, group, busy: state.busyKey !== '', onSet: toggle })),
       )
     }
 

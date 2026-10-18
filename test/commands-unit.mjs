@@ -500,6 +500,60 @@ async function boot({ resumeMode = 'fail' } = {}) {
     statSync(snap).mtimeMs === afterStop, `mtime ${afterStop} → ${statSync(snap).mtimeMs}`)
 }
 
+// ===== v0.6.7：风控「每分钟会话上限」（面板里的数值控件，1–10、默认值 5、**默认不开启**）=====
+// 真机关心三件事：① 开关关着时**完全不限流**（升级上来的忙群行为不变）；
+// ② 打开后超出的那条**不许再烧模型回合**；③ 必须留痕（硬约束①：无静默分支）。
+{
+  const followupsOf = (built) => [...built.sessions.values()].reduce((total, record) => total + (record.followups?.length ?? 0), 0)
+  const drive = async (mock, text) => {
+    mock.emit('message', {
+      bot: mock.socket, userId: 1001, messageType: 'private', groupId: 0, text,
+      atMe: true, ats: [], reply: null, records: [], images: [], files: [],
+      messageId: `cap-${Math.random().toString(36).slice(2, 8)}`, senderName: '管理员', raw: { message: [] },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 120))
+  }
+
+  // ① 默认（开关关着）：连发 8 条都要进模型，一条都不许丢
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'qq-turncap-off-'))
+    const built = makeCtx({})
+    const mock = new MockServer()
+    const bridge = new QQBridge(built.ctx, { ...config, cwd: dir, chatTurnsPerMinute: 2 }, mock, { info() {}, warn() {}, error() {} })
+    bridge.start()
+    for (let index = 0; index < 8; index += 1) await drive(mock, `第 ${index + 1} 条`)
+    check('★默认不开启：`chatTurnsPerMinute=2` 也不会丢消息（8 条全部进模型）',
+      followupsOf(built) === 8 && bridge.turnDropped === 0 && bridge.trace.recent({ limit: 20, stage: 'ratelimit' }).length === 0,
+      `followups=${followupsOf(built)} dropped=${bridge.turnDropped}`)
+    bridge.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  // ② 打开开关后才按数字生效
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'qq-turncap-on-'))
+    const built = makeCtx({})
+    const mock = new MockServer()
+    const bridge = new QQBridge(built.ctx, { ...config, cwd: dir, chatTurnLimitEnabled: true, chatTurnsPerMinute: 2 }, mock, { info() {}, warn() {}, error() {} })
+    bridge.start()
+    await drive(mock, '第一条')
+    await drive(mock, '第二条')
+    const before = followupsOf(built)
+    await drive(mock, '第三条')
+    check('★每分钟上限 2：前两条进模型', before === 2, `followups=${before}`)
+    check('★第 3 条被丢弃，不再进模型（省额度、不排队）', followupsOf(built) === before, `followups 增加 ${followupsOf(built) - before}`)
+    const capped = bridge.trace.recent({ limit: 20, stage: 'ratelimit' })
+    check('★被丢弃的那条在 trace 里写明原因（无静默分支）',
+      capped.length === 1 && capped[0].ok === false && String(capped[0].reason).includes('每分钟会话上限')
+      && String(capped[0].reason).includes('2'),
+      String(capped[0]?.reason ?? '(没有 ratelimit 事件)'))
+    check('被丢弃的条数记账（turnDropped，快照里以 features.turnsDropped 暴露）',
+      bridge.turnDropped === 1, String(bridge.turnDropped))
+    bridge.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 rmSync(baseDir, { recursive: true, force: true })
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed > 0 ? 1 : 0)

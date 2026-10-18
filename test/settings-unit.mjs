@@ -15,7 +15,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
+  PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
   panelSnapshot, readPatchValue, upsertPatchValue,
 } from '../lib/panel.js'
 import { detectNapcatBat, planNapcatAction } from '../lib/napcat-launch.js'
@@ -23,7 +23,7 @@ import {
   argvProfile, consoleLaunchPlan, consoleStartCommand, mountQqAiPanel, napcatWebUiUrl, panelLinkSources, probePort, profileDirOf,
   redactSecrets, resolveProfile, sameSiteGuard, shimHeartbeatFresh, spawnBackgroundProcess, spawnDetachedProcess,
 } from '../lib/settings-routes.js'
-import { Config } from '../lib/index.js'
+import { Config, numberMetaOf } from '../lib/index.js'
 
 /**
  * 解析 YAML 用平台自己那份 `yaml` 包（不引第三方依赖，也不把本机路径写进仓库）：
@@ -64,16 +64,45 @@ const brief = (value) => {
 const dict = Config?.dict ?? {}
 const missing = PANEL_KEYS.filter((key) => !(key in dict))
 const notBoolean = PANEL_KEYS.filter((key) => key in dict && String(dict[key]?.type) !== 'boolean')
+// 「开关 + 数值」合并行在界面上是**一行**、在配置里是**两个键**：
+// 数"几个开关几个数值"必须用展开后的逐键表（PANEL_FLAT_ROWS），不能直接平铺分组。
+const panelRows = PANEL_FLAT_ROWS
+const boolRows = panelRows.filter((entry) => (entry.type ?? 'boolean') === 'boolean')
+const numRows = panelRows.filter((entry) => entry.type === 'number')
 check('面板里的每个开关都在 schema 里', missing.length === 0, missing.join(','))
-check('面板里的每个开关都是布尔键（只有布尔才能当开关）', notBoolean.length === 0, notBoolean.join(','))
+check('面板里的每个**布尔**行都是布尔键（只有布尔才能当开关）',
+  boolRows.every((entry) => String(dict[entry.key]?.type) === 'boolean'),
+  boolRows.filter((entry) => String(dict[entry.key]?.type) !== 'boolean').map((entry) => entry.key).join(','))
+/**
+ * v0.6.7 数值控件：**类型与范围都必须和 schema 一致**。
+ * 范围不在这里手抄——`numberMetaOf()` 从 schema 现读，这条只负责钉住"面板登记的就是 schema 的数值键"。
+ */
+const numberMeta = numberMetaOf()
+check('面板里的每个**数值**行都是 schema 的数值键，且 schema 给出了范围',
+  numRows.length > 0 && numRows.every((entry) => {
+    const meta = numberMeta[entry.key]
+    return String(dict[entry.key]?.type) === 'number' && entry.unit !== '' && meta !== undefined
+      && Number.isFinite(meta.min) && Number.isFinite(meta.max) && meta.max > meta.min
+  }),
+  numRows.filter((entry) => {
+    const meta = numberMeta[entry.key]
+    return String(dict[entry.key]?.type) !== 'number' || !meta || !Number.isFinite(meta.min) || !Number.isFinite(meta.max)
+  }).map((entry) => entry.key).join(','))
+check('★「每分钟会话上限」按需求登记：数值 1–10、默认 5，且**默认不开启**（用户 2026-10-16 两次确认）',
+  numberMeta.chatTurnsPerMinute?.min === 1 && numberMeta.chatTurnsPerMinute?.max === 10
+  && numberMeta.chatTurnsPerMinute?.default === 5
+  && String(dict.chatTurnLimitEnabled?.type) === 'boolean' && dict.chatTurnLimitEnabled?.meta?.default === false
+  && numRows.some((entry) => entry.key === 'chatTurnsPerMinute' && entry.unit === '条/分钟')
+  && boolRows.some((entry) => entry.key === 'chatTurnLimitEnabled'),
+  brief({ meta: numberMeta.chatTurnsPerMinute, enabledDefault: dict.chatTurnLimitEnabled?.meta?.default }))
 check('面板分组都有 id/title 且开关不重复',
   PANEL_GROUPS.every((group) => group.id && group.title && group.rows.length > 0)
   && new Set(PANEL_KEYS).size === PANEL_KEYS.length,
-  `${PANEL_GROUPS.length} 组 / ${PANEL_KEYS.length} 开关`)
+  `${PANEL_GROUPS.length} 组 / ${PANEL_KEYS.length} 键（${boolRows.length} 开关 + ${numRows.length} 数值）`)
 
 // ---- 说明必须"写全"（用户反馈：有些开关只写了标签，没说需要额外软件/模型）----
 const needsVocabulary = new Set(Object.values(PANEL_NEEDS))
-const allRows = PANEL_GROUPS.flatMap((group) => group.rows)
+const allRows = PANEL_FLAT_ROWS
 const shortHints = allRows.filter((entry) => !entry.hint || entry.hint.trim().length < 20)
 check('每个开关都有像样的说明（≥20 字，不许空着或一句带过）',
   shortHints.length === 0, shortHints.map((entry) => entry.key).join(','))
@@ -94,10 +123,10 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 59）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 70 = 60 开关 + 10 数值）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 59,
+  && allRows.length === 70,
   `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length}`)
 check('生图/语音这些"要装东西"的功能，说明里点明了需要什么',
   ['imageGenEnabled', 'ttsEnabled'].every((key) => {
@@ -181,6 +210,31 @@ check('upsert 能插入新键（缩进对齐 config 块）',
 check('upsert 对同值写入是幂等的（changed=false）',
   upsertPatchValue(updated.yaml, 'ttsEnabled', false).changed === false)
 check('upsert 拒绝非布尔值', upsertPatchValue(PATCH, 'ttsEnabled', 'yes').ok === false)
+
+/**
+ * ---- v0.6.7：数值键的读写（风控阈值）----
+ * 面板从"只能开关"扩到"能改数值"，这条链路要三处都通：写进 YAML（还是数字，不是字符串）、
+ * 读回来还是数字、同值写入幂等（否则每点一次都会重写文件）。
+ */
+{
+  const numeric = upsertPatchValue(PATCH, 'chatTurnsPerMinute', 7)
+  check('★upsert 能写数值键（写成数字字面量，不加引号）',
+    numeric.ok === true && numeric.changed === true && /^ {4}chatTurnsPerMinute: 7$/m.test(numeric.yaml),
+    numeric.reason)
+  check('数值写回后能读成数字（不是字符串）',
+    readPatchValue(numeric.yaml, 'chatTurnsPerMinute') === 7,
+    String(readPatchValue(numeric.yaml, 'chatTurnsPerMinute')))
+  check('数值同值写入幂等（changed=false，不重写文件）',
+    upsertPatchValue(numeric.yaml, 'chatTurnsPerMinute', 7).changed === false)
+  check('改数值会变（changed=true）',
+    upsertPatchValue(numeric.yaml, 'chatTurnsPerMinute', 3).changed === true
+    && /^ {4}chatTurnsPerMinute: 3$/m.test(upsertPatchValue(numeric.yaml, 'chatTurnsPerMinute', 3).yaml))
+  check('upsert 拒绝小数（这几项 schema 都是 step(1)）',
+    upsertPatchValue(PATCH, 'chatTurnsPerMinute', 3.5).ok === false)
+  check('readPatchValue 不会把布尔读成数字、也不会把引号里的数字当数字',
+    readPatchValue('    ttsEnabled: true\n', 'ttsEnabled') === null
+    && readPatchValue('- id: dsh-qq-onebot-bridge\n  config:\n    n: "7"\n', 'n') === null)
+}
 check('upsert 在没有本插件条目时如实拒绝',
   upsertPatchValue('- id: other\n  config:\n    a: 1\n', 'ttsEnabled', true).reason.includes('没有 dsh-qq-onebot-bridge'))
 check('upsert 对空文件如实拒绝', upsertPatchValue('', 'ttsEnabled', true).ok === false)
@@ -328,6 +382,9 @@ const dispose = mountQqAiPanel(fakeHost, {
   exists: existsSync,
   ensureDir: (target) => mkdirSync(target, { recursive: true }),
   env,
+  // 数值控件的范围来自 schema（真实宿主由 lib/index.js 传进来）——测试也要接上，
+  // 否则数值写入会因为"范围未知"被拒（这是刻意的 fail closed）。
+  numberMeta: numberMetaOf(),
   // 探测必须注入：否则断言会随"本机 8799 有没有在跑"而变（这坑真踩过一次）。
   probe: async () => false,
 })
@@ -392,6 +449,49 @@ check('POST 拒绝白名单外的键（面板不会变成任意配置编辑器�
 const rejected2 = makeResponse()
 await setHandler(fakeRequest('POST', { key: 'ttsEnabled', value: 'yes' }, JSON_HEADERS), rejected2)
 check('POST 拒绝非布尔值', rejected2.out.status === 400, rejected2.out.body)
+
+/**
+ * ★ v0.6.7：数值控件（风控阈值）的写入校验。
+ * 取值范围**由 schema 现读**（`numberMeta`），所以 11 必须被拒、7 必须通过，
+ * 而且落盘的是一个**数字字面量**（`chatTurnsPerMinute: 7`），不是字符串。
+ */
+const numOk = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'chatTurnsPerMinute', value: 7 }, JSON_HEADERS), numOk)
+const numOkBody = JSON.parse(numOk.out.body)
+check('★POST 接受合法的数值（7，落在 1–10 内）并写进配置',
+  numOk.out.status === 200 && numOkBody.ok === true && numOkBody.changed === true
+  && /^\s*chatTurnsPerMinute: 7$/m.test(readFileSync(patchPath, 'utf8')),
+  brief({ status: numOk.out.status, reason: numOkBody.reason }))
+check('★数值写成功后回的面板里，该行带 schema 的范围、文件值是 7、且标成待重启',
+  (() => {
+    // 注意：这里挂载用的生效 config 里没有这个键（测试夹具），所以 value 走默认 5、
+    // fileValue 是刚写进去的 7 ⇒ pending=true 是**正确**的（宿主热重载后才会变成 7）。
+    // 数值键现在嵌在「开关 + 数值」合并行的 `number` 里，不再是顶层行。
+    const combo = numOkBody.panel?.groups.flatMap((g) => g.rows).find((r) => r.key === 'chatTurnLimitEnabled')
+    const row = combo?.number
+    return combo?.type === 'switchNumber' && row?.key === 'chatTurnsPerMinute'
+      && row.value === 5 && row.fileValue === 7
+      && row.min === 1 && row.max === 10 && row.unit === '条/分钟' && row.pending === true
+  })(),
+  brief(numOkBody.panel?.groups.flatMap((g) => g.rows).find((r) => r.type === 'switchNumber')?.number))
+for (const [label, value, expect] of [
+  ['超上限（11）', 11, '范围'],
+  ['低于下限（0）', 0, '范围'],
+  ['小数（3.5）', 3.5, '整数'],
+  ['字符串（"7"）', '7', '数值项'],
+  ['布尔（true）', true, '数值项'],
+]) {
+  const res = makeResponse()
+  await setHandler(fakeRequest('POST', { key: 'chatTurnsPerMinute', value }, JSON_HEADERS), res)
+  const body = JSON.parse(res.out.body)
+  check(`★POST 拒绝${label}，并把原因说清楚`,
+    res.out.status === 400 && String(body.reason).includes(expect)
+    && (expect !== '范围' || /1–10/.test(body.reason)),
+    brief({ status: res.out.status, reason: body.reason }))
+}
+check('数值写入失败时**没有**改动配置文件（仍是 7）',
+  /^\s*chatTurnsPerMinute: 7$/m.test(readFileSync(patchPath, 'utf8')),
+  readFileSync(patchPath, 'utf8').split(/\r?\n/).find((line) => line.includes('chatTurnsPerMinute')) ?? '(无)')
 const wrongMethod = makeResponse()
 await getHandler(fakeRequest('POST'), wrongMethod)
 check('方法不对给 405', wrongMethod.out.status === 405, String(wrongMethod.out.status))
@@ -1321,6 +1421,34 @@ try {
   check('快捷操作把 ok:false 当"解释"显示（不当异常抛掉）——按钮点不动时用户要看到原因',
     clientText.includes('payload.ok === true') && clientText.includes('busyAction'))
   /**
+   * ★ v0.6.7：数值行在客户端真的被分派到 NumberRow（不是画成一个开关），
+   *   且提交的是**数字**、范围来自服务端载荷（`row.min/max/step`）而不是客户端写死。
+   */
+  check('★客户端按 row.type 分派数值控件，提交数字而不是"开/关"',
+    clientText.includes("row.type === 'number'") && clientText.includes('function NumberRow')
+    && clientText.includes('spec.min') && clientText.includes('spec.max') && clientText.includes('spec.step')
+    && clientText.includes("typeof value === 'number'") && !/NumberRow[\s\S]{0,600}onSet\(row\.key, !/.test(clientText),
+    `NumberRow=${clientText.includes('function NumberRow')}`)
+  /**
+   * ★ 2026-10-17 用户报：「你这两个怎么不合并在一起」——开关与它的数值必须在**同一行**里渲染，
+   *   不能再拆成两行上下对照。这条钉住：有合并组件、有分派、两个键各自写。
+   */
+  check('★「开关 + 数值」合成一行（SwitchNumberRow），两个键各自写',
+    clientText.includes('function SwitchNumberRow')
+    && clientText.includes("row.type === 'switchNumber'")
+    && /onSet\(row\.key, next\)/.test(clientText) && /onSet\(num\.key, next\)/.test(clientText),
+    `SwitchNumberRow=${clientText.includes('function SwitchNumberRow')}`)
+  /**
+   * ★ 2026-10-17 用户报：「右边的上下控制层感觉没必要啊，而且还不方便，影响美观」——
+   *   那是 `<input type="number">` 的**原生上下箭头**，与我们的 −/+ 重复。必须靠 CSS 关掉，
+   *   否则只要有人再写一遍 `type="number"` 而忘了这条，那对小箭头就会自己长回来。
+   */
+  check('★数值输入框关掉了原生上下箭头（只留 −/+，别让 Chromium 再画一对小的）',
+    clientText.includes('::-webkit-inner-spin-button') && clientText.includes('::-webkit-outer-spin-button')
+    && /spin-button\{[^}]*appearance:none/.test(clientText)
+    && clientText.includes('appearance:textfield'),
+    `spin=${clientText.includes('::-webkit-inner-spin-button')} textfield=${clientText.includes('appearance:textfield')}`)
+  /**
    * ★ 桌面端（`dsh-app://app/`）的链接：主窗口只把 http(s) 外链丢给系统浏览器，相对地址会被 deny。
    * 客户端必须：认得出桌面宿主、对**相对入口**改走 `?format=json` + `window.open(绝对地址)`，
    * 而**网页版保持默认导航**（别把本来就好的路径改坏）。
@@ -1500,6 +1628,22 @@ try {
           nonDefault: true,
           fileValue: true,
           pending: true,
+        }, {
+          // 「开关 + 数值」合并行（v0.6.7）：一个开关 + 一个数字，**同一行**渲染。
+          key: 'chatTurnLimitEnabled',
+          label: '每分钟进模型上限',
+          hint: '**入站**风控：每分钟最多让几条消息进模型（默认关）。',
+          needs: '',
+          type: 'switchNumber',
+          value: false,
+          defaultValue: false,
+          nonDefault: false,
+          fileValue: null,
+          pending: false,
+          number: {
+            key: 'chatTurnsPerMinute', label: '每分钟进模型条数', unit: '条/分钟',
+            value: 5, min: 1, max: 10, step: 1, defaultValue: 5, nonDefault: false, fileValue: null, pending: false,
+          },
         }],
       }],
     },
@@ -1587,6 +1731,15 @@ try {
   check('浅渲染：依赖标记与说明都渲染出来（** 被解析成加粗而不是原样显示）',
     readyText.includes('需外部服务') && readyText.includes('需要额外的语音服务')
     && !readyText.includes('**'), readyText.slice(-160))
+  /**
+   * ★ v0.6.7「开关 + 数值」合并行：**同一行**里既有开关又有 −/+ 数字控件。
+   * 只要有人把它拆回两行（或忘了分派 switchNumber），这条就红。
+   */
+  check('★浅渲染：合并行（开关 + 数值）在同一行里渲染出开关和 −/+ 两个按钮',
+    readyText.includes('每分钟进模型上限') && readyText.includes('chatTurnLimitEnabled + chatTurnsPerMinute')
+    && ready.switches.length === 2
+    && ready.buttons.some((btn) => btn.text === '−') && ready.buttons.some((btn) => btn.text === '+'),
+    `switches=${ready.switches.length} buttons=${ready.buttons.map((b) => b.text).join('')}`)
   check('浅渲染：「相关链接」与调试台状态都渲染出来（链接目标查 href 属性）',
     readyText.includes('更新日志（v9.9.9）') && readyText.includes('调试台（独立控制台）')
     && ready.hrefs.includes('/qqai/console') && ready.hrefs.some((href) => href.includes('CHANGELOG.md'))
@@ -1598,7 +1751,8 @@ try {
     errorRendered.text.includes('读取面板失败') && errorRendered.text.includes('连接失败'), errorRendered.text.slice(0, 90))
   // 开关的"开/关"必须真的映射到 aria-checked（视觉就是靠它上色的）
   check('浅渲染：开关状态映射到 aria-checked（关=false / 开=true）',
-    ready.switches.length === 1 && ready.switches[0].checked === 'false', JSON.stringify(ready.switches))
+    // 夹具里现在有两个开关（布尔行 + 合并行），都关着 ⇒ 都是 'false'。
+    ready.switches.length === 2 && ready.switches.every((item) => item.checked === 'false'), JSON.stringify(ready.switches))
   const onFixture = { ...fixture, data: { ...fixture.data, groups: [{ ...fixture.data.groups[0], rows: [{ ...fixture.data.groups[0].rows[0], value: true, pending: false }] }] } }
   const onRendered = shallowText(render, [onFixture])
   check('浅渲染：打开的行渲染成 aria-checked=true',
