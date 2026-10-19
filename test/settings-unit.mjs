@@ -15,7 +15,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
+  PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, PANEL_ROW_BY_KEY, QUIET_MAX_RANGES, normalizeNumberList, normalizeQuietRanges, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
   panelSnapshot, readPatchValue, upsertPatchValue,
 } from '../lib/panel.js'
 import { detectNapcatBat, planNapcatAction } from '../lib/napcat-launch.js'
@@ -23,7 +23,7 @@ import {
   argvProfile, consoleLaunchPlan, consoleStartCommand, mountQqAiPanel, napcatWebUiUrl, panelLinkSources, probePort, profileDirOf,
   redactSecrets, resolveProfile, sameSiteGuard, shimHeartbeatFresh, spawnBackgroundProcess, spawnDetachedProcess,
 } from '../lib/settings-routes.js'
-import { Config, numberMetaOf } from '../lib/index.js'
+import { Config, configDefaults, numberMetaOf } from '../lib/index.js'
 
 /**
  * 解析 YAML 用平台自己那份 `yaml` 包（不引第三方依赖，也不把本机路径写进仓库）：
@@ -78,15 +78,24 @@ check('面板里的每个**布尔**行都是布尔键（只有布尔才能当开
  * 范围不在这里手抄——`numberMetaOf()` 从 schema 现读，这条只负责钉住"面板登记的就是 schema 的数值键"。
  */
 const numberMeta = numberMetaOf()
-check('面板里的每个**数值**行都是 schema 的数值键，且 schema 给出了范围',
+/**
+ * 数值行必须都是 schema 的 number 键、且单位写全。
+ * 范围**不是每行都有**（例如 `botQq` 只要求是整数、schema 没有 min/max）：
+ * 有范围的必须来自 schema（min<max），没范围的 snapshot 里必须是 `null`——不能变成 0（那会把输入夹死在 [0,0]）。
+ */
+check('面板里的每个**数值**行都是 schema 的数值键（有范围的由 schema 给，没范围的是 null）',
   numRows.length > 0 && numRows.every((entry) => {
     const meta = numberMeta[entry.key]
-    return String(dict[entry.key]?.type) === 'number' && entry.unit !== '' && meta !== undefined
-      && Number.isFinite(meta.min) && Number.isFinite(meta.max) && meta.max > meta.min
+    if (String(dict[entry.key]?.type) !== 'number' || entry.unit === '' || meta === undefined) return false
+    const hasRange = Number.isFinite(meta.min) && Number.isFinite(meta.max) && meta.max > meta.min
+    if (hasRange) return true
+    const row = panelSnapshot({}, { defaults: {}, numberMeta }).groups.flatMap((group) => group.rows)
+      .find((item) => item.key === entry.key)
+    return row?.min === null && row?.max === null
   }),
   numRows.filter((entry) => {
     const meta = numberMeta[entry.key]
-    return String(dict[entry.key]?.type) !== 'number' || !meta || !Number.isFinite(meta.min) || !Number.isFinite(meta.max)
+    return String(dict[entry.key]?.type) !== 'number' || !meta
   }).map((entry) => entry.key).join(','))
 check('★「每分钟会话上限」按需求登记：数值 1–10、默认 5，且**默认不开启**（用户 2026-10-16 两次确认）',
   numberMeta.chatTurnsPerMinute?.min === 1 && numberMeta.chatTurnsPerMinute?.max === 10
@@ -123,11 +132,14 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 70 = 60 开关 + 10 数值）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 77 = 63 开关 + 11 数值 + 1 时段 + 2 白名单）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 70,
-  `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length}`)
+  && allRows.length === 77
+  && boolRows.length === 63 && numRows.length === 11
+  && allRows.filter((entry) => entry.type === 'times').length === 1
+  && allRows.filter((entry) => entry.type === 'list').length === 2,
+  `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length} / 共 ${allRows.length}`)
 check('生图/语音这些"要装东西"的功能，说明里点明了需要什么',
   ['imageGenEnabled', 'ttsEnabled'].every((key) => {
     const entry = allRows.find((row) => row.key === key)
@@ -235,9 +247,35 @@ check('upsert 拒绝非布尔值', upsertPatchValue(PATCH, 'ttsEnabled', 'yes').
     readPatchValue('    ttsEnabled: true\n', 'ttsEnabled') === null
     && readPatchValue('- id: dsh-qq-onebot-bridge\n  config:\n    n: "7"\n', 'n') === null)
 }
-check('upsert 在没有本插件条目时如实拒绝',
-  upsertPatchValue('- id: other\n  config:\n    a: 1\n', 'ttsEnabled', true).reason.includes('没有 dsh-qq-onebot-bridge'))
-check('upsert 对空文件如实拒绝', upsertPatchValue('', 'ttsEnabled', true).ok === false)
+/**
+ * ★ v0.6.8 真机修复：插件可以作为 `dsh.profile.bundles` 成员挂载（挂载声明在**包自带 bundle 层**），
+ * 这时 profile 的 `cordis.patch.yml` 里一条本插件条目都没有 —— 以前点任何开关都报
+ * "没有 dsh-qq-onebot-bridge 条目"，现在必须**追加一条**（patch 的用途就是按 id 覆盖/追加）。
+ */
+const noEntry = upsertPatchValue('- id: other\n  config:\n    a: 1\n', 'ttsEnabled', true)
+check('★upsert：patch 里没有本插件条目时**追加一条**（原有条目一字不动）',
+  noEntry.ok === true && noEntry.changed === true
+  && /^- id: dsh-qq-onebot-bridge$/m.test(noEntry.yaml)
+  && /^\s+name: dsh-qq-onebot-bridge$/m.test(noEntry.yaml)
+  && /^\s+config:$/m.test(noEntry.yaml) && /^\s{4}ttsEnabled: true$/m.test(noEntry.yaml)
+  && noEntry.yaml.startsWith('- id: other\n  config:\n    a: 1\n'),
+  brief(noEntry.yaml))
+check('★upsert：追加出来的整份文件仍是合法 YAML（一条数组）',
+  (() => { try { const doc = YAML.parse(noEntry.yaml); return Array.isArray(doc) && doc.length === 2 } catch { return false } })(),
+  brief(noEntry.yaml))
+check('★upsert：空文件 / 只有注释 / 空的 [] 都能写出条目',
+  upsertPatchValue('', 'ttsEnabled', true).ok === true && /^- id: dsh-qq-onebot-bridge$/m.test(upsertPatchValue('', 'ttsEnabled', true).yaml)
+  && upsertPatchValue('# 只有注释\n', 'ttsEnabled', true).ok === true
+  && upsertPatchValue('[]\n', 'ttsEnabled', true).ok === true
+  && !upsertPatchValue('[]\n', 'ttsEnabled', true).yaml.includes('[]'),
+  brief(upsertPatchValue('[]\n', 'ttsEnabled', true).yaml))
+check('★upsert：不是条目数组的 patch 仍然如实拒绝（不猜结构）',
+  upsertPatchValue('plugins:\n  a: 1\n', 'ttsEnabled', true).ok === false)
+const noConfig = upsertPatchValue('- id: dsh-qq-onebot-bridge\n  name: dsh-qq-onebot-bridge\n', 'ttsEnabled', true)
+check('★upsert：条目存在但没有 config 块时补一个（不重复加条目）',
+  noConfig.ok === true && (noConfig.yaml.match(/- id: dsh-qq-onebot-bridge/g) || []).length === 1
+  && /^\s+config:$/m.test(noConfig.yaml) && /^\s{4}ttsEnabled: true$/m.test(noConfig.yaml),
+  brief(noConfig.yaml))
 
 // ---- 第二轮对抗性审查用"逐条回退"证明过：下面这些加固此前**没有任何断言覆盖**（回退了也全绿）----
 const parseYaml = (text) => {
@@ -374,8 +412,10 @@ const fakeHost = {
 const env = { DSH_HOME: dir }
 const dispose = mountQqAiPanel(fakeHost, {
   profile: 'web',
-  config: { ttsEnabled: true },
-  defaults: { ttsEnabled: false },
+  // `cwd` 决定面板从哪读运行快照（qq-runtime.json）；不给就会去读仓库根目录那份旧的。
+  config: { ttsEnabled: true, cwd: dir },
+  // 用**真实**的 schema 默认值（v0.6.8 起含数值与时段默认）：面板的"默认："徽标就靠它。
+  defaults: configDefaults(),
   readFile: readFileSync,
   writeFile: writeFileSync,
   copy: copyFileSync,
@@ -402,8 +442,9 @@ const fakeRequest = (method, body, headers = {}) => ({
   async *[Symbol.asyncIterator]() { if (body !== undefined) yield Buffer.from(JSON.stringify(body)) },
 })
 
-check('挂载了七条路由（读面板 + 写开关 + 调试台 + 账号 + 二维码 + 启动 NapCat + 重启登录）',
-  registered.length === 7 && registered.some((r) => r.path === '/qqai/panel')
+check('挂载了八条路由（读面板 + 写开关 + 批量写 + 调试台 + 账号 + 二维码 + 启动 NapCat + 重启登录）',
+  registered.length === 8 && registered.some((r) => r.path === '/qqai/panel')
+  && registered.some((r) => r.path === '/qqai/panel/set-batch')
   && registered.some((r) => r.path === '/qqai/panel/set') && registered.some((r) => r.path === '/qqai/console')
   && registered.some((r) => r.path === '/qqai/account') && registered.some((r) => r.path === '/qqai/napcat/start')
   && registered.some((r) => r.path === '/qqai/napcat/relogin') && registered.some((r) => r.path === '/qqai/napcat/qr'),
@@ -411,6 +452,8 @@ check('挂载了七条路由（读面板 + 写开关 + 调试台 + 账号 + 二�
 
 const getHandler = registered.find((r) => r.path === '/qqai/panel').handler
 const setHandler = registered.find((r) => r.path === '/qqai/panel/set').handler
+// v0.6.8：合并写入单独一条路由（连点开关时前端攒批走它）。
+const batchHandler = registered.find((r) => r.path === '/qqai/panel/set-batch').handler
 
 const readRes = makeResponse()
 await getHandler(fakeRequest('GET'), readRes)
@@ -418,7 +461,7 @@ const readBody = JSON.parse(readRes.out.body)
 check('GET /qqai/panel 返回分组 + profile + 配置文件路径',
   readRes.out.status === 200 && readBody.ok === true && readBody.groups.length === PANEL_GROUPS.length
   && readBody.profile === 'web' && readBody.patchFile.endsWith('cordis.patch.yml'), brief({ status: readRes.out.status }))
-check('GET 里带上"待重启"信息（生效值 vs 文件值）',
+check('GET 里带上"更新中"信息（生效值 vs 文件值）',
   readBody.groups.flatMap((g) => g.rows).find((row) => row.key === 'ttsEnabled')?.pending === false,
   brief(readBody.groups.flatMap((g) => g.rows).find((row) => row.key === 'ttsEnabled')))
 check('GET 带上「相关链接」（账号入口 + 更新日志 + 调试台）',
@@ -432,6 +475,73 @@ check('GET 的 links 第一条就是账号入口（没有额外的 account 字�
   readBody.links[0]?.id === 'account' && readBody.links[0]?.href === '/qqai/account'
   && readBody.account === undefined,
   brief({ account: readBody.account, links: readBody.links?.map((link) => link.id) }))
+/**
+ * ★ v0.6.8：载荷里必须带 `pluginVersion`，且等于 package.json 的版本。
+ * 它是"宿主里正加载的那份代码"的版本——页面看不到新分组时，用户先看它就知道要不要重载。
+ */
+const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+check('★面板载荷带 pluginVersion（= package.json 的版本，用来判断宿主有没有重载）',
+  typeof readBody.pluginVersion === 'string' && readBody.pluginVersion === pkgVersion,
+  brief({ pluginVersion: readBody.pluginVersion }))
+/**
+ * ★ 前端 bundle 里那份 `CLIENT_VERSION` 必须与 package.json 一致：
+ * 它是"页面攥着的前端是哪一版"的判据——不同步的话，横幅要么永远误报、要么永远不报。
+ */
+check('★客户端 CLIENT_VERSION 与 package.json 版本一致（横幅判据不能错位）',
+  readFileSync(join(import.meta.dirname, '..', 'client', 'client.js'), 'utf8').includes(`const CLIENT_VERSION = '${pkgVersion}'`),
+  `期望 CLIENT_VERSION = '${pkgVersion}'`)
+/**
+ * ★ v0.6.8（用户 2026-10-19「为啥登陆了以后没有任何反馈啊」「但是能登上 NapCat」）：
+ *   面板必须能回答"桥连上没有 / 最近有没有收到消息 / 为什么没回"。
+ *   数据源是插件写的 `qq-runtime.json`；测试夹具里没有这个文件 ⇒ 必须如实报"还没有运行快照"，
+ *   绝不能假装"在线"。
+ */
+check('★面板载荷带桥的运行状态（没有快照时如实说没有，不假装在线）',
+  readBody.bridge !== undefined && typeof readBody.bridge === 'object'
+  && readBody.bridge.present === false
+  && typeof readBody.bridge.reason === 'string' && readBody.bridge.reason.includes('运行快照')
+  && typeof readBody.bridge.file === 'string',
+  brief(readBody.bridge))
+// 真的放一份快照进去：入站时间、被拦原因都要能读出来。
+{
+  const snapshotFile = join(dir, 'qq-runtime.json')
+  const now = Date.now()
+  writeFileSync(snapshotFile, JSON.stringify({
+    updatedAt: now,
+    uptimeSeconds: 42,
+    botOnline: true,
+    trace: { total: 3, topReasons: [{ reason: 'whitelist: 私聊用户不在 allowUsers 白名单', count: 2 }] },
+    recentTraces: [
+      { id: 't-1', chatKey: 'u:2000000001', startedAt: now - 5000, stages: ['inbound'] },
+      { id: 't-2', chatKey: 'g:3000000001', startedAt: now - 6000, stages: ['inbound'] },
+      { id: 't-3', chatKey: 'u:2000000001', startedAt: now - 7000, stages: ['inbound'] },
+    ],
+  }), 'utf8')
+  const res = makeResponse()
+  await getHandler(fakeRequest('GET'), res)
+  const body = JSON.parse(res.out.body)
+  check('★有快照时：桥=已连接、账号在线、最近消息 5 秒前、被拦原因读得到',
+    body.bridge?.present === true && body.bridge.botOnline === true
+    && body.bridge.lastInboundAgoSeconds >= 4 && body.bridge.lastInboundAgoSeconds <= 8
+    && body.bridge.topReason?.count === 2 && String(body.bridge.topReason.reason).includes('白名单'),
+    brief(body.bridge))
+  /**
+   * ★ v0.6.8「快捷加入」：最近来信里的会话要按 user/group 分好、去掉重复——白名单面板拿它一键加号码。
+   */
+  check('★最近来信按 user/group 分好并去重（给白名单做一键加入）',
+    Array.isArray(body.bridge.recentChats) && body.bridge.recentChats.length === 2
+    && body.bridge.recentChats[0].kind === 'user' && body.bridge.recentChats[0].id === 2000000001
+    && body.bridge.recentChats[1].kind === 'group' && body.bridge.recentChats[1].id === 3000000001,
+    brief(body.bridge.recentChats))
+  // 快照是**按需**写的（空闲时几分钟不更新很正常）⇒ 久没更新**不算**故障，仍显示"已连接"。
+  writeFileSync(snapshotFile, JSON.stringify({ updatedAt: Date.now() - 120_000, trace: {}, recentTraces: [] }), 'utf8')
+  const stale = makeResponse()
+  await getHandler(fakeRequest('GET'), stale)
+  check('★快照久没更新不算死（空闲≠故障：present 仍为 true，只有文件缺失才算没跑）',
+    JSON.parse(stale.out.body).bridge?.present === true && JSON.parse(stale.out.body).bridge.ageSeconds > 60,
+    brief(JSON.parse(stale.out.body).bridge))
+  rmSync(snapshotFile, { force: true })
+}
 
 const writeRes = makeResponse()
 await setHandler(fakeRequest('POST', { key: 'ttsEnabled', value: false }, JSON_HEADERS), writeRes)
@@ -462,7 +572,7 @@ check('★POST 接受合法的数值（7，落在 1–10 内）并写进配置',
   numOk.out.status === 200 && numOkBody.ok === true && numOkBody.changed === true
   && /^\s*chatTurnsPerMinute: 7$/m.test(readFileSync(patchPath, 'utf8')),
   brief({ status: numOk.out.status, reason: numOkBody.reason }))
-check('★数值写成功后回的面板里，该行带 schema 的范围、文件值是 7、且标成待重启',
+check('★数值写成功后回的面板里，该行带 schema 的范围、文件值是 7、且标成更新中',
   (() => {
     // 注意：这里挂载用的生效 config 里没有这个键（测试夹具），所以 value 走默认 5、
     // fileValue 是刚写进去的 7 ⇒ pending=true 是**正确**的（宿主热重载后才会变成 7）。
@@ -492,6 +602,209 @@ for (const [label, value, expect] of [
 check('数值写入失败时**没有**改动配置文件（仍是 7）',
   /^\s*chatTurnsPerMinute: 7$/m.test(readFileSync(patchPath, 'utf8')),
   readFileSync(patchPath, 'utf8').split(/\r?\n/).find((line) => line.includes('chatTurnsPerMinute')) ?? '(无)')
+/**
+ * ★ v0.6.8：避开高峰期的时段列表（`quietHours`）。
+ * 功能早就有、但面板里一个都没暴露；这里钉四件事：
+ *   ① 三个键都在面板白名单里（开关/周末豁免/时段）；
+ *   ② 时段按引擎口径归一化（`9:0-12:0` → `09:00-12:00`，跨夜合法，起止相同要拒，最多 8 段）；
+ *   ③ 写进配置的是**流式数组**，且 `readPatchValue` 能读回（"更新中"才判得出来）；
+ *   ④ 非法输入一律 400 且**不动文件**。
+ */
+const quietKeys = ['quietHoursEnabled', 'quietWeekendExempt', 'quietHours']
+check('★避开高峰期的三个键都在面板白名单里',
+  quietKeys.every((key) => PANEL_KEYS.includes(key)), quietKeys.filter((key) => !PANEL_KEYS.includes(key)).join(','))
+const quietGroup = PANEL_GROUPS.find((group) => group.id === 'quiet')
+check('★避开高峰期是一整组（开关 + 周末豁免 + 时段）',
+  quietGroup !== undefined && quietGroup.title === '避开高峰期'
+  && quietGroup.rows.map((row) => row.key).join(',') === 'quietHoursEnabled,quietWeekendExempt,quietHours'
+  && quietGroup.rows.find((row) => row.key === 'quietHours')?.type === 'times',
+  brief(quietGroup && quietGroup.rows.map((row) => `${row.key}:${row.type ?? 'boolean'}`)))
+check('★时段归一化：`9:0-12:0` → `09:00-12:00`，跨夜 `22:00-6:00` → `22:00-06:00`',
+  JSON.stringify(normalizeQuietRanges(['9:0-12:0'])) === JSON.stringify({ ok: true, ranges: ['09:00-12:00'], reason: '' })
+  && JSON.stringify(normalizeQuietRanges(['22:00-6:00']).ranges) === JSON.stringify(['22:00-06:00']),
+  brief(normalizeQuietRanges(['9:0-12:0'])))
+/**
+ * ★ v0.6.8（用户 2026-10-20「我设定了咋还是回复」）：时段绑在「避开高峰期」开关上，
+ *   开关关着时服务端必须把 `inactive` 带给界面（界面据此显示琥珀色提醒）。
+ */
+check('★时段行会带上「开关关着所以不生效」的状态',
+  (() => {
+    const off = panelSnapshot({ quietHoursEnabled: false, quietHours: ['00:00-12:00'] }, { defaults: {}, numberMeta })
+    const on = panelSnapshot({ quietHoursEnabled: true, quietHours: ['00:00-12:00'] }, { defaults: {}, numberMeta })
+    const rowOff = off.groups.flatMap((group) => group.rows).find((row) => row.key === 'quietHours')
+    const rowOn = on.groups.flatMap((group) => group.rows).find((row) => row.key === 'quietHours')
+    return rowOff?.inactive === true && /避开高峰期/.test(rowOff.inactiveReason)
+      && rowOn?.inactive !== true
+  })(),
+  brief(panelSnapshot({ quietHoursEnabled: false }, { numberMeta }).groups.flatMap((g) => g.rows).find((r) => r.key === 'quietHours')))
+/**
+ * ★ v0.6.8（用户 2026-10-20「不需要添加白名单的功能…但是群聊还是要 @ 的」）：
+ *   `allowAllChats` 打开后两个名单失效 ⇒ 服务端要标 `inactive`，界面才不会让人以为"加了人不生效"。
+ *   方向与时段的相反（这个开关**打开**才失效），由 `dependsActive: false` 表达。
+ */
+check('★「回应所有人」打开后两个名单标成不生效（方向与时段相反）',
+  (() => {
+    const rowsOf = (cfg) => panelSnapshot(cfg, { defaults: {}, numberMeta }).groups.flatMap((group) => group.rows)
+    const off = rowsOf({ allowAllChats: false })
+    const on = rowsOf({ allowAllChats: true })
+    const pick = (rows, key) => rows.find((row) => row.key === key)
+    return pick(off, 'allowUsers')?.inactive === false
+      && pick(off, 'allowGroups')?.inactive === false
+      && pick(on, 'allowUsers')?.inactive === true && /回应所有人/.test(pick(on, 'allowUsers').inactiveReason)
+      && pick(on, 'allowGroups')?.inactive === true
+  })(),
+  brief(panelSnapshot({ allowAllChats: true }, { defaults: {}, numberMeta }).groups.flatMap((g) => g.rows).find((r) => r.key === 'allowUsers')))
+for (const [label, value, expect] of [
+  ['起止相同（9:00-9:00）', ['9:00-9:00'], '起止时间相同'],
+  ['小时越界（7:00-25:00）', ['7:00-25:00'], '越界'],
+  ['看不懂（abc）', ['abc'], '看不懂'],
+  ['不是数组（"9:00-12:00"）', '9:00-12:00', '必须是数组'],
+  ['超过 8 段', Array.from({ length: 9 }, (unused, index) => `${index}:00-${index + 1}:00`), '最多 8 段'],
+]) {
+  const result = normalizeQuietRanges(value)
+  check(`★时段校验拒绝${label}并说明原因`,
+    result.ok === false && String(result.reason).includes(expect), brief(result))
+}
+const quietOk = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'quietHours', value: ['9:0-12:0', '22:00-6:00'] }, JSON_HEADERS), quietOk)
+const quietOkBody = JSON.parse(quietOk.out.body)
+check('★POST 接受时段并**归一化后**写进配置（流式数组）',
+  quietOk.out.status === 200 && quietOkBody.ok === true && quietOkBody.changed === true
+  && /^\s*quietHours: \["09:00-12:00","22:00-06:00"\]$/m.test(readFileSync(patchPath, 'utf8')),
+  brief({ status: quietOk.out.status, reason: quietOkBody.reason, line: readFileSync(patchPath, 'utf8').split(/\r?\n/).find((line) => line.includes('quietHours')) }))
+check('★readPatchValue 能读回流式数组（"更新中"判得出来）',
+  JSON.stringify(readPatchValue(readFileSync(patchPath, 'utf8'), 'quietHours')) === JSON.stringify(['09:00-12:00', '22:00-06:00']),
+  brief(readPatchValue(readFileSync(patchPath, 'utf8'), 'quietHours')))
+check('★时段写成功后回的面板里，该行带默认时段并标成更新中',
+  (() => {
+    // 夹具的生效 config 里没有 quietHours ⇒ value 回落 schema 默认（9:00-12:00 / 14:00-18:00），
+    // fileValue 是刚写进去的归一化数组 ⇒ pending 正确。宿主热重载后 value 才会变成写进去的值。
+    const row = quietOkBody.panel?.groups.flatMap((group) => group.rows).find((item) => item.key === 'quietHours')
+    return row?.type === 'times'
+      && JSON.stringify(row.value) === JSON.stringify(['9:00-12:00', '14:00-18:00'])
+      && JSON.stringify(row.fileValue) === JSON.stringify(['09:00-12:00', '22:00-06:00'])
+      && row.pending === true
+      && Array.isArray(row.defaultValue) && row.maxRanges === QUIET_MAX_RANGES
+  })(),
+  brief(quietOkBody.panel?.groups.flatMap((group) => group.rows).find((item) => item.key === 'quietHours')))
+const quietBad = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'quietHours', value: ['9:00-9:00'] }, JSON_HEADERS), quietBad)
+check('★非法时段 400 且**不动文件**',
+  quietBad.out.status === 400 && /起止时间相同/.test(JSON.parse(quietBad.out.body).reason)
+  && /quietHours: \["09:00-12:00","22:00-06:00"\]/m.test(readFileSync(patchPath, 'utf8')),
+  brief({ status: quietBad.out.status, reason: JSON.parse(quietBad.out.body).reason }))
+const quietWrongType = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'quietHours', value: [1, 2] }, JSON_HEADERS), quietWrongType)
+check('★时段里的非字符串被拒', quietWrongType.out.status === 400, quietWrongType.out.body.slice(0, 90))
+const quietEmpty = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'quietHours', value: [] }, JSON_HEADERS), quietEmpty)
+check('★空数组可以写（= 不静默任何时段）',
+  quietEmpty.out.status === 200 && /^\s*quietHours: \[\]$/m.test(readFileSync(patchPath, 'utf8')),
+  brief({ status: quietEmpty.out.status, line: readFileSync(patchPath, 'utf8').split(/\r?\n/).find((line) => line.includes('quietHours')) }))
+/**
+ * ★ 块写法（老配置常见：`quietHours:` 换行后缩进的 `- "9:00-12:00"`）写回时必须整段替换成流式序列，
+ *   否则会留下孤立的 `- ...` 行 ⇒ 同一个键两处定义、YAML 直接坏掉。这条钉住"只剩一处 + 读得回来"。
+ */
+const blockYaml = [
+  'plugins:',
+  '  - id: dsh-qq-onebot-bridge',
+  '    config:',
+  '      quietHours:',
+  '        - "9:00-12:00"',
+  '        - "14:00-18:00"',
+  '      ttsEnabled: true',
+  '',
+].join('\n')
+const blockOut = upsertPatchValue(blockYaml, 'quietHours', ['09:00-12:00', '22:00-06:00'])
+check('★块写法的时段被整段换成流式（不留孤立的 - 行，其它键与顺序不动）',
+  blockOut.ok === true && blockOut.changed === true
+  && (blockOut.yaml.match(/quietHours/g) || []).length === 1
+  && /^\s*quietHours: \["09:00-12:00","22:00-06:00"\]$/m.test(blockOut.yaml)
+  && blockOut.yaml.includes('ttsEnabled: true')
+  && !/- "9:00-12:00"/.test(blockOut.yaml),
+  brief(blockOut.yaml))
+check('★块写法换完还能读回（"更新中"照常判）',
+  JSON.stringify(readPatchValue(blockOut.yaml, 'quietHours')) === JSON.stringify(['09:00-12:00', '22:00-06:00']),
+  brief(readPatchValue(blockOut.yaml, 'quietHours')))
+// 恢复到默认两段，后面的断言（以及"配置没被弄坏"这条）继续按常规跑。
+await setHandler(fakeRequest('POST', { key: 'quietHours', value: ['9:00-12:00', '14:00-18:00'] }, JSON_HEADERS), makeResponse())
+
+/**
+ * ★ v0.6.8：**合并写入**。连点几个开关时前端攒成一个批次发过来——一次写盘 ⇒ 宿主只重载一次
+ * （每写一个键都重载一次的话，几次重载会互相打断，面板就"鬼畜"）。
+ * 规矩：整批校验、整批写；有一条不合法就**一个字都不写**。
+ */
+const batchOk = makeResponse()
+await batchHandler(fakeRequest('POST', { entries: [{ key: 'ttsEnabled', value: true }, { key: 'chatTurnsPerMinute', value: 9 }] }, JSON_HEADERS), batchOk)
+const batchBody = JSON.parse(batchOk.out.body)
+check('★批量写入：一次请求写多个键（count/keys 回报，两个键都落盘）',
+  batchOk.out.status === 200 && batchBody.ok === true && batchBody.changed === true
+  && batchBody.count === 2 && JSON.stringify(batchBody.keys) === JSON.stringify(['ttsEnabled', 'chatTurnsPerMinute'])
+  && /^\s*ttsEnabled: true$/m.test(readFileSync(patchPath, 'utf8'))
+  && /^\s*chatTurnsPerMinute: 9$/m.test(readFileSync(patchPath, 'utf8')),
+  brief({ status: batchOk.out.status, count: batchBody.count, keys: batchBody.keys }))
+const batchBad = makeResponse()
+await batchHandler(fakeRequest('POST', { entries: [{ key: 'ttsEnabled', value: false }, { key: 'chatTurnsPerMinute', value: 99 }] }, JSON_HEADERS), batchBad)
+check('★批量写入：有一条不合法就整批拒绝（不做部分写入——ttsEnabled 仍是 true）',
+  batchBad.out.status === 400 && /99/.test(JSON.parse(batchBad.out.body).reason)
+  && /^\s*ttsEnabled: true$/m.test(readFileSync(patchPath, 'utf8')),
+  brief({ status: batchBad.out.status, reason: JSON.parse(batchBad.out.body).reason }))
+const batchEmpty = makeResponse()
+await batchHandler(fakeRequest('POST', { entries: [] }, JSON_HEADERS), batchEmpty)
+check('★批量写入：空批次 400（不写盘）', batchEmpty.out.status === 400, batchEmpty.out.body.slice(0, 90))
+const batchUnknown = makeResponse()
+await batchHandler(fakeRequest('POST', { entries: [{ key: 'port', value: 1234 }] }, JSON_HEADERS), batchUnknown)
+check('★批量写入：白名单外的键整批拒掉', batchUnknown.out.status === 400 && /白名单/.test(batchUnknown.out.body), batchUnknown.out.body.slice(0, 90))
+// 还原这两个键，后面的断言继续按常规跑。
+await batchHandler(fakeRequest('POST', { entries: [{ key: 'ttsEnabled', value: false }, { key: 'chatTurnsPerMinute', value: 5 }] }, JSON_HEADERS), makeResponse())
+/**
+ * ★ v0.6.8（用户 2026-10-19「做一个白名单添加面板」）：
+ *   `allowUsers` / `allowGroups` 是 `z.array(z.number())`，而 OneBot 的 user_id 也是数字 ⇒
+ *   写进去的必须是**数字**（写成字符串 `"2000000001"` 会让 `#allowed()` 的 includes 永远匹配不上）。
+ */
+/** ★ 2026-10-20 用户指定位置：「白名单放到对话基础下边」→ 后来又「拉到对话基础上边」：**第一组**。 */
+check('★「AI账号与白名单」是**第一组**（在「对话基础」上面）',
+  PANEL_GROUPS[0]?.id === 'whitelist' && PANEL_GROUPS[1]?.id === 'chat',
+  brief(PANEL_GROUPS.slice(0, 3).map((group) => group.id)))
+/**
+ * ★ 2026-10-20 用户改名：「白名单」→「**AI账号与白名单**」，并把 `botQq` 也收进这一组
+ *   （三者是同一类东西：这是哪个机器人账号、它认谁）。
+ */
+check('★「AI账号与白名单」= AI 账号 + 不设白名单 + 两个准入门 + 两个白名单',
+  (() => {
+    const group = PANEL_GROUPS.find((item) => item.id === 'whitelist')
+    return group !== undefined && group.title === 'AI账号与白名单'
+      // 准入门（群里只理被 @ 的 / 允许私聊）和白名单是同一件事：谁能让它开口
+      && group.rows.map((row) => `${row.key}:${row.type}`).join(',') === 'botQq:number,allowAllChats:boolean,replyOnlyWhenMentioned:boolean,acceptPrivate:boolean,allowUsers:list,allowGroups:list'
+      // 对话基础里不再留这两个开关（避免两处都能改、看着像重复）
+      && !PANEL_GROUPS.find((item) => item.id === 'chat').rows.some((row) => row.key === 'replyOnlyWhenMentioned' || row.key === 'acceptPrivate')
+  })(),
+  brief(PANEL_GROUPS.find((item) => item.id === 'whitelist')?.rows.map((row) => `${row.key}:${row.type}`)))
+for (const [label, value, expect] of [
+  ['字符串号码（"2000000001"）', ['2000000001'], '只接受数字号码'],
+  ['负数（-1）', [-1], '正整数'],
+  ['小数（1.5）', [1.5], '正整数'],
+  ['不是数组', '2000000001', '必须是数组'],
+  ['超过 50 条', Array.from({ length: 51 }, (unused, index) => 1000000 + index), '最多 50 条'],
+]) {
+  const result = normalizeNumberList(value)
+  check(`★白名单校验拒绝${label}并说明原因`,
+    result.ok === false && String(result.reason).includes(expect), brief(result))
+}
+check('★白名单去重（同一个号码写两次只留一条）',
+  JSON.stringify(normalizeNumberList([2000000001, 2000000001]).list) === JSON.stringify([2000000001]),
+  brief(normalizeNumberList([2000000001, 2000000001])))
+const allowOk = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'allowGroups', value: [3000000001] }, JSON_HEADERS), allowOk)
+check('★POST 白名单写进配置（数字、不带引号）',
+  allowOk.out.status === 200 && /^\s*allowGroups: \[3000000001\]$/m.test(readFileSync(patchPath, 'utf8'))
+  && JSON.stringify(readPatchValue(readFileSync(patchPath, 'utf8'), 'allowGroups')) === JSON.stringify([3000000001]),
+  brief({ status: allowOk.out.status, line: readFileSync(patchPath, 'utf8').split(/\r?\n/).find((line) => line.includes('allowGroups')) }))
+const allowBad = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'allowUsers', value: ['2000000001'] }, JSON_HEADERS), allowBad)
+check('★POST 拒绝字符串号码（会把白名单变成永远匹配不上的死配置）',
+  allowBad.out.status === 400 && /只接受数字号码/.test(JSON.parse(allowBad.out.body).reason),
+  brief(JSON.parse(allowBad.out.body).reason))
 const wrongMethod = makeResponse()
 await getHandler(fakeRequest('POST'), wrongMethod)
 check('方法不对给 405', wrongMethod.out.status === 405, String(wrongMethod.out.status))
@@ -1346,11 +1659,11 @@ check('★管理员分支走 WMI Win32_Process.Create，且 if/else 之间没有
 
 dispose()
 check('dispose 注销了全部路由（配置热重载后能重新挂载，不会撞 duplicate route）',
-  registered.length === 0 && disposed.length === 7, `left=${registered.length}`)
+  registered.length === 0 && disposed.length === 8, `left=${registered.length}`)
 mountQqAiPanel(fakeHost, {
   profile: 'web', config: {}, readFile: readFileSync, writeFile: writeFileSync, env,
 })
-check('注销后可以再次挂载（模拟宿主重建插件条目）', registered.length === 7, String(registered.length))
+check('注销后可以再次挂载（模拟宿主重建插件条目）', registered.length === 8, String(registered.length))
 
 // ------------------------------------------------- 3. 客户端 bundle 冒烟 ---- ----
 const clientText = readFileSync(join(import.meta.dirname, '..', 'client', 'client.js'), 'utf8')
@@ -1439,6 +1752,79 @@ try {
     && /onSet\(row\.key, next\)/.test(clientText) && /onSet\(num\.key, next\)/.test(clientText),
     `SwitchNumberRow=${clientText.includes('function SwitchNumberRow')}`)
   /**
+   * ★ v0.6.8：时段列表行（TimesRow）——`quietHours` 用两个原生时间控件编辑，整组提交。
+   * 钉住：有组件、有分派、用了 `type="time"`、并且**整组**提交（不是单段）。
+   */
+  check('★时段行（TimesRow）用原生时间控件编辑，整组提交',
+    clientText.includes('function TimesRow')
+    && clientText.includes("row.type === 'times'")
+    && clientText.includes("type: 'time'")
+    && /TimesRow[\s\S]{0,2600}onSet\(row\.key, next\)/.test(clientText),
+    `TimesRow=${clientText.includes('function TimesRow')}`)
+  /**
+   * ★ v0.6.8：点「刷新」以前**什么都不显示**（载荷没变 ⇒ 界面一个像素都不动，看着像按钮坏了）。
+   * 现在必须：按钮进入「刷新中…」、成功后回一句"已刷新：N 组 / M 行 · 宿主 vX"、标题旁显示版本号。
+   */
+  check('★「刷新」有反馈（刷新中… / 已刷新：N 组 · 宿主版本），标题旁显示 pluginVersion',
+    clientText.includes('刷新中…')
+    && clientText.includes('announce: true')
+    && clientText.includes('已刷新：')
+    && clientText.includes('data.pluginVersion')
+    && clientText.includes('qqai-ver'),
+    `刷新中=${clientText.includes('刷新中…')} announce=${clientText.includes('announce: true')}`)
+  /**
+   * ★ v0.6.8（用户 2026-10-19 连续几条：「点击完以后就会立即更新状态」「连续开了几个开关以后就会鬼畜」
+   *   「改回启用就刷新，但是启用以后会 3 秒内变灰不让按」「启用或者关闭」）：
+   *   ① **乐观更新**：点完立刻变（`applyWrittenValue` 清掉 pending），开关保留官方那种滑动动画；
+   *   ② **合并写入**：350ms 内的多次点击攒成一个批次走 `/qqai/panel/set-batch`，一次写盘 ⇒ 宿主只重载一次；
+   *   ③ **写完锁 3 秒**（`COOLING_MS`，盖住宿主 ~2.3 秒的热重载），期间所有开关/数字/按钮**变灰不可点**；
+   *   ④ 3 秒后**自动刷新一次**（不是轮询），拿到重载后的真实值。
+   *   「启用或者关闭」都走同一条路——只要 `changed` 就锁。
+   */
+  check('★点完立即变 + 马上变灰锁 3 秒 + 350ms 攒批 + 3 秒后自动刷新一次（不轮询）',
+    clientText.includes('function applyWrittenValue')
+    && clientText.includes('const pendingWrites = new Map()')
+    && clientText.includes("void flushQueue() }, 350)")
+    && clientText.includes("'/qqai/panel/set-batch'")
+    && clientText.includes('const COOLING_MS = 3000')
+    // 锁是在**点击那一刻**就开始的（启用/关闭都一样），不是写完才开始
+    && /const toggle = useCallback\([\s\S]{0,900}cooling: true/.test(clientText)
+    && /const toggle = useCallback\([\s\S]{0,1600}\}, COOLING_MS\)/.test(clientText)
+    && clientText.includes('秒内先别动，之后自动刷新')
+    && clientText.includes("busy: state.busyKey !== '' || state.cooling === true")
+    && clientText.includes('state.refreshing === true || state.cooling === true')
+    && /setTimeout\(\(\) => \{[\s\S]{0,260}void load\(\{ announce: true \}\)[\s\S]{0,60}\}, COOLING_MS\)/.test(clientText)
+    && !clientText.includes('waitUntilEffective')
+    && !/setTimeout\(resolve, 700\)/.test(clientText)
+    && clientText.includes('transition:transform .12s ease'),
+    `batch=${clientText.includes('/qqai/panel/set-batch')} cool=${clientText.includes('COOLING_MS')} poll=${clientText.includes('waitUntilEffective')}`)
+  /**
+   * ★ v0.6.8（用户 2026-10-19「为啥静默时段还是需要刷新」）：
+   *   写完之后自动刷新那一次，如果宿主还没重载完，载荷里这一行会**退回旧值**——
+   *   界面上就等于"刚改的被吞了"，还得再手动刷一次。
+   *   所以没生效的写入要记在 `optimisticValues` 里，**每次拉载荷都盖回去**，
+   *   直到某趟载荷里该键确实生效（值相同且 pending 不是 true）才删掉。
+   */
+  check('★写完的旧值不会"退回去"（未生效写入每次拉载荷都盖回来，生效后才清）',
+    clientText.includes('const optimisticValues = new Map()')
+    && clientText.includes('function applyOptimistic(data)')
+    && clientText.includes('const data = applyOptimistic(await callJson(')
+    && /applyOptimistic[\s\S]{0,700}pending !== true && sameValue\(row\.value, value\)/.test(clientText)
+    && /const toggle = useCallback\([\s\S]{0,700}optimisticValues\.set\(key, value\)/.test(clientText)
+    && /optimisticValues\.delete\(item\.key\)/.test(clientText),
+    `sticky=${clientText.includes('optimisticValues')}`)
+  /**
+   * ★ v0.6.8（用户 2026-10-19「不是灰三秒吗？为啥一下就亮了」）：
+   *   `setState(object)` 在函数组件里是**整对象替换**——写成功后如果那么写，会把 `cooling` 一起抹掉，
+   *   350ms 时控件就重新亮了。所有"写成功/拉载荷"必须走函数式更新，保住 cooling 等字段。
+   */
+  check('★冷却不会被写成功后的 setState 抹掉（写成功路径必须函数式更新）',
+    /setState\(\(prev\) => \(\{[\s\S]{0,500}status: 'ready'/.test(clientText)
+    // 老写法是 `setState({\n  status: 'ready',\n  data, …`——整对象替换会把 cooling 抹掉
+    && !/setState\(\{\s*\n\s*status: 'ready',\s*\n\s*data,/.test(clientText)
+    && /setState\(\(prev\) => \(\{ \.\.\.prev, busyKey: '', cooling: false/.test(clientText),
+    `functional=${/setState\(\(prev\) => \(\{[\s\S]{0,500}status: 'ready'/.test(clientText)}`)
+  /**
    * ★ 2026-10-17 用户报：「右边的上下控制层感觉没必要啊，而且还不方便，影响美观」——
    *   那是 `<input type="number">` 的**原生上下箭头**，与我们的 −/+ 重复。必须靠 CSS 关掉，
    *   否则只要有人再写一遍 `type="number"` 而忘了这条，那对小箭头就会自己长回来。
@@ -1448,6 +1834,21 @@ try {
     && /spin-button\{[^}]*appearance:none/.test(clientText)
     && clientText.includes('appearance:textfield'),
     `spin=${clientText.includes('::-webkit-inner-spin-button')} textfield=${clientText.includes('appearance:textfield')}`)
+  /**
+   * ★ v0.6.8（用户 2026-10-20「AI账号那一栏为啥还有加减啊」）：
+   *   `botQq` 是**标识**不是阈值 ⇒ 不画 ± 按钮（`noStepper`），输入框放宽；其它数值行照旧带 ±。
+   */
+  check('★「AI 账号」不画 ±（标识不是阈值），输入框加宽',
+    clientText.includes('spec.noStepper === true')
+    && clientText.includes("className: noStepper ? 'qqai-num-input wide' : 'qqai-num-input'")
+    && clientText.includes('.qqai-num-input.wide{width:112px}')
+    && (() => {
+      const snap = panelSnapshot({ botQq: 2000000001 }, { defaults: { botQq: 0 }, numberMeta })
+      const rows = snap.groups.flatMap((group) => group.rows)
+      return rows.find((row) => row.key === 'botQq')?.noStepper === true
+        && rows.find((row) => row.key === 'dedupWindowSeconds')?.noStepper === false
+    })(),
+    `noStepper=${clientText.includes('spec.noStepper === true')}`)
   /**
    * ★ 桌面端（`dsh-app://app/`）的链接：主窗口只把 http(s) 外链丢给系统浏览器，相对地址会被 deny。
    * 客户端必须：认得出桌面宿主、对**相对入口**改走 `?format=json` + `window.open(绝对地址)`，
@@ -1539,6 +1940,7 @@ const shallowText = (element, states) => {
   const switches = []
   const linkRows = []   // 每个 <a> 自己的文本：用来验"整行是不是都能点"
   const buttons = []    // 按钮：文案 + 是否禁用（快捷操作的禁用态靠它验）
+  const inputs = []     // 输入框：type + value（时段行/数值行的控件靠它验）
   /** 收集某个子树里的纯文本（组件的孩子都是已经 createElement 出来的节点，够用）。 */
   const textOf = (node) => {
     if (node === null || node === undefined || typeof node === 'boolean') return ''
@@ -1568,10 +1970,12 @@ const shallowText = (element, states) => {
     // 开关的状态也只在属性上：收集起来验 aria-checked 的映射。
     if (node.props?.role === 'switch') switches.push({ checked: node.props['aria-checked'], disabled: node.props.disabled === true })
     if (node.type === 'button') buttons.push({ text: textOf(node.props?.children), disabled: node.props?.disabled === true })
+    // 时间/数字输入框也只在属性上：收集 type + value，用来验"时段行真的画出了两个时间控件"。
+    if (node.type === 'input') inputs.push({ type: node.props?.type, value: node.props?.value, label: node.props?.['aria-label'] })
     walk(node.props?.children)
   }
   walk(element)
-  return { text: text.join(' | '), hrefs, switches, linkRows, buttons }
+  return { text: text.join(' | '), hrefs, switches, linkRows, buttons, inputs }
 }
 try {
   // 用同一个 React 桩重新执行一遍 bundle，拿到真正的面板组件（组件闭包里的 React 必须就是它）
@@ -1590,6 +1994,11 @@ try {
     },
   })
   const render = element.render()
+/** 前端 bundle 里声明的版本（用它构造"前端与宿主一致"的夹具）。 */
+const clientVersion = (() => {
+  const match = /const CLIENT_VERSION = '([^']+)'/.exec(clientText)
+  return match ? match[1] : ''
+})()
 
   const loading = shallowText(render, [{ status: 'loading', data: null, error: '', flash: '', busyKey: '' }])
   check('浅渲染：加载态能渲染出来（不抛异常）', loading.text.includes('读取中…'), loading.text.slice(0, 70))
@@ -1602,11 +2011,24 @@ try {
     busyAction: '',
     data: {
       profile: 'desktop',
+      // v0.6.8：标题右侧显示的"宿主加载的那份代码"的版本（用来判断要不要重载）。
+      pluginVersion: '9.9.9',
       patchFile: '/srv/dsh/profiles/desktop/cordis.patch.yml',
       patchExists: true,
       notes: { apply: '写入说明', scope: '范围说明' },
       // NapCat 的实时状态（快捷操作按钮据此禁用）
       napcat: { running: false, port: 6099 },
+      // v0.6.8：桥的运行状态（"登录了却没有反馈"靠这一行回答）。
+      bridge: {
+        present: true, file: '/srv/dsh/qq-runtime.json', ageSeconds: 2, uptimeSeconds: 600,
+        botOnline: true, lastInboundAt: 1, lastInboundAgoSeconds: 12, traceTotal: 5,
+        topReason: { reason: 'whitelist: 私聊用户不在 allowUsers 白名单', count: 2 },
+        // 「快捷加入」候选：用户 100000002 还没在白名单里（chip 里的是 2000000001）。
+        recentChats: [
+          { chatKey: 'u:100000002', kind: 'user', id: 100000002, at: 1 },
+          { chatKey: 'g:3000000001', kind: 'group', id: 3000000001, at: 1 },
+        ],
+      },
       // 「相关链接」整组（账号第一、调试台压最底下）——渲染在标题正下方、开关分组之前。
       links: [
         { id: 'account', label: 'QQ助手账号（登录 / 扫码）', href: '/qqai/account', hint: '机器人账号的扫码 / 登录状态页；**需要先运行 NapCat**（没起来就点上面的「启动 NapCat」），点开就是带 token 的地址，不用手输' },
@@ -1644,6 +2066,32 @@ try {
             key: 'chatTurnsPerMinute', label: '每分钟进模型条数', unit: '条/分钟',
             value: 5, min: 1, max: 10, step: 1, defaultValue: 5, nonDefault: false, fileValue: null, pending: false,
           },
+        }, {
+          // 时段列表行（v0.6.8）：两个原生时间控件 + 删除按钮 + 「+ 加一段」。
+          key: 'quietHours',
+          label: '静默时段',
+          hint: '要静默的时间段，可多段；**支持跨夜**（22:00-6:00）。',
+          needs: '',
+          type: 'times',
+          value: ['09:00-12:00'],
+          maxRanges: 8,
+          defaultValue: ['9:00-12:00', '14:00-18:00'],
+          nonDefault: true,
+          fileValue: null,
+          pending: false,
+        }, {
+          // 号码列表行（v0.6.8，白名单）：一条一个 chip + 输入框 + 「+ 添加」。
+          key: 'allowUsers',
+          label: '允许的用户（QQ 号）',
+          hint: '私聊白名单：只有列表里的 QQ 号可以私聊机器人。**空 = 拒绝所有私聊**。',
+          needs: '',
+          type: 'list',
+          value: [2000000001],
+          maxItems: 50,
+          defaultValue: [],
+          nonDefault: true,
+          fileValue: null,
+          pending: false,
         }],
       }],
     },
@@ -1653,6 +2101,70 @@ try {
   check('浅渲染：标题/分组/开关标签与键名都出现',
     readyText.includes('QQ助手') && readyText.includes('对话基础') && readyText.includes('语音回复')
     && readyText.includes('ttsEnabled'), readyText.slice(0, 120))
+  /**
+   * ★ v0.6.8：标题旁显示**宿主加载的那份代码**的版本（夹具写 9.9.9），刷新按钮也在。
+   * 少这一行，用户就无法判断"看不到新分组"到底是没重载还是面板坏了。
+   */
+  check('★浅渲染：标题旁显示宿主版本号（v9.9.9），「刷新」按钮在',
+    readyText.includes('v9.9.9') && ready.buttons.some((btn) => btn.text === '刷新'),
+    `buttons=${ready.buttons.map((b) => b.text).join('')}`)
+  /**
+   * ★ v0.6.8：桥的状态行也要渲染出来（"登录了却没有反馈"就靠它）。
+   * 夹具给一份"已连接 + 被拦"的桥状态，必须看到连接与拦截原因。
+   */
+  check('★浅渲染：桥状态行画出「已连接」与最近的拦截原因',
+    readyText.includes('桥：已连接') && readyText.includes('最近收到消息')
+    && readyText.includes('最近被拦下') && readyText.includes('白名单'),
+    readyText.slice(-200))
+  /**
+   * ★ v0.6.8 白名单行（号码列表）：chip 显示号码 + 一个输入框 + 「+ 添加/50」。
+   */
+  check('★浅渲染：白名单行画出号码 chip、输入框与「+ 添加」',
+    readyText.includes('允许的用户（QQ 号）') && readyText.includes('2000000001')
+    && readyText.includes('+ 添加（1/50）')
+    && ready.inputs.some((item) => item.label === '允许的用户（QQ 号）：要添加的号码')
+    && ready.buttons.some((btn) => btn.text === '×'),
+    `buttons=${ready.buttons.map((b) => b.text).join('')}`)
+  /**
+   * ★ v0.6.8「快捷功能」：白名单行要能**从最近来信一键加入**（不用手输号码）。
+   * 夹具里 `u:100000002` 不在白名单 ⇒ 必须出现「+ 100000002」；已经在列表里的 2000000001 不许再出现。
+   */
+  check('★浅渲染：白名单行给出「最近来信」一键加入（已在列表里的不重复给）',
+    readyText.includes('最近来信')
+    && ready.buttons.some((btn) => btn.text === '+ 100000002')
+    && !ready.buttons.some((btn) => btn.text === '+ 2000000001'),
+    `buttons=${ready.buttons.map((b) => b.text).join('')}`)
+  /**
+   * ★ v0.6.8：`allowAllChats` 打开时，两个名单行要显示琥珀色"现在不起作用"（别再让人白加号码）。
+   */
+  check('★浅渲染：名单被「回应所有人」顶掉时那行有醒目提醒',
+    (() => {
+      const group = fixture.data.groups[0]
+      const listRow = group.rows.find((row) => row.key === 'allowUsers')
+      if (!listRow) return false
+      const fixture2 = {
+        ...fixture,
+        data: {
+          ...fixture.data,
+          groups: [{ ...group, rows: [{ ...listRow, inactive: true, inactiveReason: '上面「回应所有人」开着 —— 这个名单现在不起作用' }] }],
+        },
+      }
+      const text = shallowText(render, [fixture2]).text
+      return text.includes('上面「回应所有人」开着') && text.includes('这个名单现在不起作用')
+    })(),
+    '名单行 inactive 提醒')
+  /**
+   * ★ v0.6.8：前端 bundle 落后于宿主时，必须**自己说出来**并给一个「刷新页面」按钮
+   * （夹具的宿主版本 9.9.9 ≠ CLIENT_VERSION，正好是"页面旧、宿主新"的场景）；
+   * 版本一致时不许出现这条横幅。
+   */
+  check('★浅渲染：前端落后时出现「刷新页面」横幅，版本一致时不出',
+    readyText.includes('刷新一次页面即可') && ready.buttons.some((btn) => btn.text === '刷新页面')
+    && (() => {
+      const same = shallowText(render, [{ ...fixture, data: { ...fixture.data, pluginVersion: clientVersion } }])
+      return !same.text.includes('刷新一次页面即可')
+    })(),
+    `buttons=${ready.buttons.map((b) => b.text).join('')}`)
   // 用户 2026-10-04 **七条**指示的最终口径（其中两条是"改回去 / 再挪"）：**「相关链接」整组**在标题正下方
   // （账号入口第一、更新日志、调试文档、**调试台最底下**），开关分组在它下面。
   // 浅渲染按树的顺序收集文本，所以"先后"就是界面上的上下。
@@ -1740,6 +2252,18 @@ try {
     && ready.switches.length === 2
     && ready.buttons.some((btn) => btn.text === '−') && ready.buttons.some((btn) => btn.text === '+'),
     `switches=${ready.switches.length} buttons=${ready.buttons.map((b) => b.text).join('')}`)
+  /**
+   * ★ v0.6.8 时段行：一段时段要画出**两个** `<input type="time">`（开始/结束）+ 一个删除按钮，
+   * 并且「+ 加一段」上带段数。少了任何一样，用户就没法在面板里改静默时段。
+   */
+  check('★浅渲染：时段行画出两个时间控件、「+ 加一段」和段数',
+    ready.inputs.filter((item) => item.type === 'time').length === 2
+    && ready.inputs.some((item) => item.type === 'time' && item.value === '09:00')
+    && ready.inputs.some((item) => item.type === 'time' && item.value === '12:00')
+    && ready.buttons.some((btn) => btn.text === '×')
+    && readyText.includes('+ 加一段（1/8）')
+    && readyText.includes('quietHours（1 / 8 段）'),
+    `timeInputs=${ready.inputs.filter((item) => item.type === 'time').length} buttons=${ready.buttons.map((b) => b.text).join('')}`)
   check('浅渲染：「相关链接」与调试台状态都渲染出来（链接目标查 href 属性）',
     readyText.includes('更新日志（v9.9.9）') && readyText.includes('调试台（独立控制台）')
     && ready.hrefs.includes('/qqai/console') && ready.hrefs.some((href) => href.includes('CHANGELOG.md'))

@@ -21,6 +21,8 @@ const defaults = Config({})
 check('schema 可解析默认值', defaults && typeof defaults === 'object')
 check('默认端口 6700', defaults.port === 6700)
 check('白名单默认拒绝（空数组）', Array.isArray(defaults.allowUsers) && defaults.allowUsers.length === 0 && defaults.allowGroups.length === 0)
+// v0.6.8：不设白名单（回应所有人）默认**关**——安全默认可不能被一个默认值悄悄打开。
+check('★「不设白名单」默认关（默认仍然按白名单拒绝）', defaults.allowAllChats === false)
 
 // v0.3.6
 check('会话续接默认开', defaults.sessionResumeEnabled === true)

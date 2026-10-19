@@ -26,10 +26,21 @@ window.__ModuleLoader__.load({
     const h = React.createElement
     const { useCallback, useEffect, useState } = React
 
+    /**
+     * 这份**前端 bundle** 的版本（改客户端代码时记得同步；`settings-unit` 有断言钉死它 = package.json 版本）。
+     *
+     * 它和服务端载荷里的 `pluginVersion` 对不上，就说明"页面攥着旧的前端、宿主已经换了新代码"——
+     * 浏览器只在**页面加载时**取一次 bundle，没法热替换，所以只能刷新一次页面。
+     * 与其让用户对着没变化的界面猜，不如自己认出来并给一个「刷新页面」按钮（见下面的 qqai-stale 横幅）。
+     */
+    const CLIENT_VERSION = '0.6.8'
+
     const CSS = `
 .qqai-wrap{display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--dsw-alias-label-primary,#111)}
 .qqai-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .qqai-title{font-size:15px;font-weight:600}
+/* 标题右侧的版本号：小一号、次要色——它是"宿主加载的那份代码"的版本，用来判断要不要重载。 */
+.qqai-ver{font-size:11px;font-weight:400;color:var(--dsw-alias-label-secondary,#6b7280)}
 .qqai-meta{color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px;line-height:1.6}
 .qqai-group{border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);overflow:hidden}
 .qqai-group>summary{cursor:pointer;padding:10px 12px;font-weight:600;list-style:none;background:var(--dsw-alias-bg-layer-2,#f6f7f9)}
@@ -57,6 +68,10 @@ window.__ModuleLoader__.load({
 .qqai-switch[aria-checked="true"] .qqai-knob{background:var(--dsw-alias-label-primary-foreground,#fff);transform:translateX(16px)}
 .qqai-flash{padding:6px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,#f1f5f9);color:var(--dsw-alias-state-success-primary,#15803d)}
 .qqai-err{padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-error-primary,#dc2626);color:var(--dsw-alias-state-error-primary,#dc2626);white-space:pre-wrap}
+/* 前端 bundle 落后于宿主时的那条横幅（黄色，跟错误条区分开）。 */
+.qqai-stale{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary,#b45309);background:var(--dsw-alias-bg-layer-2,#fffbeb);color:var(--dsw-alias-state-warn-primary,#b45309);font-size:12px}
+.qqai-stale button{margin-left:auto;height:24px;padding:0 10px;border:1px solid var(--dsw-alias-state-warn-primary,#b45309);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}
+.qqai-stale button:hover{background:var(--dsw-alias-bg-layer-1,#fff)}
 .qqai-warn{padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary,#b45309);color:var(--dsw-alias-state-warn-primary,#b45309)}
 .qqai-note{padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1,#eef0f3);background:var(--dsw-alias-bg-layer-2,#f8fafc);color:var(--dsw-alias-label-secondary,#6b7280);font-size:11px;line-height:1.6}
 .qqai-note b{font-weight:600;color:var(--dsw-alias-label-primary,#111)}
@@ -90,10 +105,39 @@ window.__ModuleLoader__.load({
 .qqai-num-btn:disabled{cursor:default;opacity:.4}
 .qqai-num-input{width:60px;height:24px;box-sizing:border-box;padding:0 6px;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:inherit;font-size:12px;text-align:center;-moz-appearance:textfield;appearance:textfield}
 .qqai-num-input::-webkit-outer-spin-button,.qqai-num-input::-webkit-inner-spin-button{-webkit-appearance:none;appearance:none;margin:0}
+/* 没有 ± 的那种数值行（如 AI 账号）：输入框放宽，11 位 QQ 号才放得下。 */
+.qqai-num-input.wide{width:112px}
 .qqai-num-input:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary,#2563eb));outline-offset:1px}
 .qqai-unit{font-size:11px;color:var(--dsw-alias-label-secondary,#6b7280);white-space:nowrap}
 /* 「开关 + 数值」合并行右侧那一组：开关与数字并排（中间留 10px，别让它们粘在一起）。 */
 .qqai-row-ctl{display:flex;align-items:center;gap:10px;flex:0 0 auto}
+/* 时段列表（v0.6.8）：每段一行「[开始] – [结束] ×」，最下面一个「+ 加一段」。 */
+.qqai-times{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:0 0 auto}
+.qqai-time{display:flex;align-items:center;gap:6px}
+.qqai-time-input{height:24px;box-sizing:border-box;padding:0 4px;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:inherit;font-size:12px}
+.qqai-time-input:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary,#2563eb));outline-offset:1px}
+.qqai-time-dash{font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}
+.qqai-time-del{width:24px;height:24px;padding:0;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-secondary,#6b7280);font:inherit;font-size:13px;line-height:1;cursor:pointer}
+.qqai-time-del:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,#b91c1c);background:var(--dsw-alias-bg-layer-2,#f6f7f9)}
+.qqai-time-add{align-self:flex-end;height:24px;padding:0 8px;border:1px dashed var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);font:inherit;font-size:12px;cursor:pointer}
+.qqai-time-add:hover:not(:disabled){color:var(--dsw-alias-label-primary,#111);border-color:var(--dsw-alias-brand-primary,#2563eb)}
+.qqai-time-add:disabled{cursor:default;opacity:.4}
+.qqai-time-raw{font-size:12px;color:var(--dsw-alias-state-warn-primary,#b45309)}
+/* 号码列表（白名单）：一条一个 chip，下面一个输入框 + 添加。 */
+.qqai-list{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:0 0 auto}
+.qqai-chip{display:flex;align-items:center;gap:6px;padding:2px 2px 2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l3,#0000001f);background:var(--dsw-alias-bg-layer-2,#f6f7f9)}
+.qqai-chip-text{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--dsw-alias-label-primary,#111)}
+.qqai-list-input{width:120px;height:24px;box-sizing:border-box;padding:0 6px;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:inherit;font-size:12px}
+.qqai-list-input:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary,#2563eb));outline-offset:1px}
+/* 「最近来信」快捷加入（v0.6.8）：从最近的入站消息里一键把号码加进白名单。 */
+.qqai-suggest{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;padding-top:2px}
+/* 「这行绑定的开关是关的，所以不起作用」（v0.6.8）：琥珀色小字，故意比正常说明显眼。 */
+.qqai-inactive{font-size:11px;color:var(--dsw-alias-state-warn-primary,#b45309);font-weight:500}
+/* 桥的连接状态行（v0.6.8）：已连接=绿、被拦=琥珀、没在跑=灰。 */
+.qqai-bridge{padding:6px 10px;border-radius:8px;font-size:12px;border:1px solid transparent}
+.qqai-bridge.ok{background:var(--dsw-alias-bg-layer-2,#f0fdf4);border-color:var(--dsw-alias-state-success-primary,#15803d);color:var(--dsw-alias-state-success-primary,#15803d)}
+.qqai-bridge.warn{background:var(--dsw-alias-bg-layer-2,#fffbeb);border-color:var(--dsw-alias-state-warn-primary,#b45309);color:var(--dsw-alias-state-warn-primary,#b45309)}
+.qqai-bridge.off{background:var(--dsw-alias-bg-layer-2,#f6f7f9);border-color:var(--dsw-alias-border-l3,#0000001f);color:var(--dsw-alias-label-secondary,#6b7280)}
 .qqai-state{font-size:11px}
 .qqai-state.on{color:var(--dsw-alias-state-success-primary,#15803d)}
 .qqai-state.off{color:var(--dsw-alias-state-warn-primary,#b45309)}
@@ -120,6 +164,73 @@ window.__ModuleLoader__.load({
     function richText(text) {
       const parts = String(text ?? '').split('**')
       return parts.map((part, index) => (index % 2 === 1 ? h('b', { key: index }, part) : part))
+    }
+
+    /**
+     * 写入后"立即更新状态"用的三件小事（v0.6.8）：
+     *   - `findRowFor`：在载荷里找到某个键对应的行——「开关 + 数值」合并行的数值键嵌在 `row.number` 里；
+     *   - `sameValue`：数组按内容比（时段列表）；
+     *   - `applyWrittenValue`：**乐观更新**——把刚写进去的值先落到本地载荷里（并清掉 pending），
+     *     这样点完开关立刻就动，不用等宿主那 ~2.3 秒的热重载。
+     */
+    function findRowFor(data, key) {
+      const groups = Array.isArray(data?.groups) ? data.groups : []
+      for (const group of groups) {
+        for (const row of group.rows ?? []) {
+          if (row.key === key) return row
+          if (row.number && row.number.key === key) return row.number
+        }
+      }
+      return null
+    }
+
+    function sameValue(a, b) {
+      if (Array.isArray(a) || Array.isArray(b)) return JSON.stringify(a) === JSON.stringify(b)
+      return a === b
+    }
+
+    /**
+     * 把"刚写进去的值"盖到载荷上（v0.6.8）。
+     *
+     * `pending` 默认**保留服务端说法**：写进配置不等于生效，宿主还要热重载（~2.3 秒），
+     * 这段时间显示新值 + 「更新中」徽标才是诚实的；`clearPending` 只在"确定已经生效"时用。
+     */
+    function applyWrittenValue(data, key, value, { clearPending = false } = {}) {
+      if (!data || !Array.isArray(data.groups)) return data
+      const groups = data.groups.map((group) => ({
+        ...group,
+        rows: (group.rows ?? []).map((row) => {
+          const patch = (item) => (clearPending ? { ...item, value, pending: false } : { ...item, value })
+          if (row.key === key) return patch(row)
+          if (row.number && row.number.key === key) return { ...row, number: patch(row.number) }
+          return row
+        }),
+      }))
+      return { ...data, groups }
+    }
+
+    /**
+     * 还没"生效"的本地写入（key → 值）。
+     *
+     * 为什么要有它（用户 2026-10-19「为啥静默时段还是需要刷新」）：写完 3 秒后自动刷新一次，
+     * 如果那一刻宿主的重载还没完成，载荷里这一行会**回到旧值**（只多一个「更新中」徽标）——
+     * 界面上看起来就像"刚改的东西被吞了"，于是又得手动刷新一次。
+     * 现在把写过的值记在 `optimisticValues` 里，**每次拉载荷都盖回去**，
+     * 直到某一趟载荷里该键确实生效（值相同且 pending 不再是 true）才把它从表里删掉。
+     */
+    const optimisticValues = new Map()
+
+    /** 把还没生效的本地写入盖到载荷上；顺带清理已经生效的条目。 */
+    function applyOptimistic(data) {
+      if (!data || optimisticValues.size === 0) return data
+      let merged = data
+      for (const [key, value] of [...optimisticValues.entries()]) {
+        const row = findRowFor(merged, key)
+        if (!row) { optimisticValues.delete(key); continue }
+        if (row.pending !== true && sameValue(row.value, value)) { optimisticValues.delete(key); continue }
+        merged = applyWrittenValue(merged, key, value)
+      }
+      return merged
     }
 
     /**
@@ -168,14 +279,20 @@ window.__ModuleLoader__.load({
         setDraft(String(next))
         if (next !== Number(spec.value)) onCommit(next)
       }
+      /**
+       * `spec.noStepper`（v0.6.8）：这一行是"标识"而不是"阈值"——比如「AI 账号（机器人 QQ 号）」，
+       * 填一次就完事，旁边挂 ± 既没用又像调试参数（用户 2026-10-20「AI账号那一栏为啥还有加减啊」）。
+       * 不画 ± 时把输入框放宽一点，11 位 QQ 号才放得下。
+       */
+      const noStepper = spec.noStepper === true
       return h('div', { className: 'qqai-num' },
-        h('button', {
+        noStepper ? null : h('button', {
           className: 'qqai-num-btn', type: 'button', disabled: busy === true,
           title: `减 ${step}${min !== null ? `（最小 ${min}）` : ''}`, 'aria-label': `${label}：减`,
           onClick: () => commit(Number(spec.value) - step),
         }, '−'),
         h('input', {
-          className: 'qqai-num-input', type: 'number', inputMode: 'numeric',
+          className: noStepper ? 'qqai-num-input wide' : 'qqai-num-input', type: 'number', inputMode: 'numeric',
           min, max, step, value: draft, disabled: busy === true,
           'aria-label': label,
           onChange: (event) => setDraft(event.target.value),
@@ -185,7 +302,7 @@ window.__ModuleLoader__.load({
             if (event.key === 'Escape') setDraft(String(spec.value ?? ''))
           },
         }),
-        h('button', {
+        noStepper ? null : h('button', {
           className: 'qqai-num-btn', type: 'button', disabled: busy === true,
           title: `加 ${step}${max !== null ? `（最大 ${max}）` : ''}`, 'aria-label': `${label}：加`,
           onClick: () => commit(Number(spec.value) + step),
@@ -199,7 +316,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'qqai-row' },
         h('div', { className: 'qqai-text' },
           h('label', { className: 'qqai-label' }, row.label,
-            row.pending === true ? h('span', { className: 'qqai-badge', title: '配置文件里的值与当前生效值不一致' }, '待重启') : null,
+            row.pending === true ? h('span', { className: 'qqai-badge', title: '已写入配置，正在等宿主应用（一般 2–3 秒）；期间显示的就是刚改的值' }, '更新中') : null,
             // 直接标出**出厂默认值**（不用"非默认"这种说法）：把徽标和右边的开关一对比，
             // 就知道自己改没改过。用户原话："改成'默认：状态'这样子好一点，而不是显示非默认一条"。
             row.defaultValue === true || row.defaultValue === false
@@ -232,7 +349,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'qqai-row' },
         h('div', { className: 'qqai-text' },
           h('label', { className: 'qqai-label' }, row.label,
-            row.pending === true ? h('span', { className: 'qqai-badge', title: '配置文件里的值与当前生效值不一致' }, '待重启') : null,
+            row.pending === true ? h('span', { className: 'qqai-badge', title: '已写入配置，正在等宿主应用（一般 2–3 秒）；期间显示的就是刚改的值' }, '更新中') : null,
             row.defaultValue !== null && row.defaultValue !== undefined
               ? h('span', {
                 className: 'qqai-need',
@@ -265,7 +382,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'qqai-text' },
           h('label', { className: 'qqai-label' }, row.label,
             row.pending === true || num.pending === true
-              ? h('span', { className: 'qqai-badge', title: '配置文件里的值与当前生效值不一致' }, '待重启')
+              ? h('span', { className: 'qqai-badge', title: '已写入配置，正在等宿主应用（一般 2–3 秒）；期间显示的就是刚改的值' }, '更新中')
               : null,
             row.defaultValue === true || row.defaultValue === false
               ? h('span', {
@@ -283,6 +400,214 @@ window.__ModuleLoader__.load({
         h('div', { className: 'qqai-row-ctl' },
           h(SwitchControl, { on, busy, label: row.label, onChange: (next) => onSet(row.key, next) }),
           h(NumberControl, { spec: num, busy, label: num.label || row.label, onCommit: (next) => onSet(num.key, next) })))
+    }
+
+    /** `H:MM-H:MM` → `{ start: 'HH:MM', end: 'HH:MM' }`；看不懂就 null（原样显示，绝不丢数据）。 */
+    function parseRange(text) {
+      const match = /^(\d{1,2}):(\d{1,2})\s*-\s*(\d{1,2}):(\d{1,2})$/.exec(String(text ?? '').trim())
+      if (!match) return null
+      const pad = (hour, minute) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+      return { start: pad(match[1], match[2]), end: pad(match[3], match[4]) }
+    }
+
+    /**
+     * 时段列表行（v0.6.8）：`quietHours` 这种 `H:MM-H:MM` 的数组。
+     *
+     * 每段一行两个 `<input type="time">`（原生时间控件、24 小时制）+ 一个删除按钮，最下面「+ 加一段」。
+     * 每次改动**整组提交**（`onSet(row.key, 完整数组)`）——服务端会归一化成 `HH:MM-HH:MM` 再写回，
+     * 所以界面里看到的永远是配置里的真实形状；校验失败（起止相同、越界、超 8 段）由服务端 400 说原因。
+     */
+    function TimesRow({ row, busy, onSet }) {
+      const list = Array.isArray(row.value) ? row.value : []
+      const maxRanges = Number.isFinite(row.maxRanges) ? row.maxRanges : 8
+      const defList = Array.isArray(row.defaultValue) ? row.defaultValue : null
+      const commit = (next) => onSet(row.key, next)
+      const edit = (index, field, value) => {
+        const pairs = list.map((raw) => parseRange(raw))
+        const current = pairs[index]
+        if (!current || !value) return
+        const patched = { ...current, [field]: String(value).slice(0, 5) }
+        if (patched.start === patched.end) return // 起止相同：服务端会拒，这里先不发
+        commit(pairs.map((pair, at) => (at === index ? patched : pair)).map((pair) => `${pair.start}-${pair.end}`))
+      }
+      return h('div', { className: 'qqai-row' },
+        h('div', { className: 'qqai-text' },
+          h('label', { className: 'qqai-label' }, row.label,
+            row.pending === true ? h('span', { className: 'qqai-badge', title: '已写入配置，正在等宿主应用（一般 2–3 秒）；期间显示的就是刚改的值' }, '更新中') : null,
+            defList !== null
+              ? h('span', {
+                className: 'qqai-need',
+                title: `出厂默认：${defList.length === 0 ? '（空）' : defList.join(' / ')}`
+                  + (row.nonDefault === true ? '（你改过）' : '（与出厂一致）'),
+              }, `默认：${defList.length === 0 ? '空' : `${defList.length} 段`}`)
+              : null,
+            row.needs ? h('span', { className: 'qqai-need', title: '这个功能要额外准备的东西' }, row.needs) : null),
+          row.hint ? h('span', { className: 'qqai-hint', title: row.hint }, richText(row.hint)) : null,
+          // ★ v0.6.8：这些时段绑定在一个开关上，开关关着就**不会生效**——必须说出来
+          //   （2026-10-20 真机：用户设了时段却还在回复，因为「避开高峰期」开关是另一个键、没开）。
+          row.inactive === true
+            ? h('span', { className: 'qqai-inactive' }, `⚠️ ${row.inactiveReason || '开关关着，这些时段不起作用'}`)
+            : null,
+          h('span', { className: 'qqai-key' }, `${row.key}（${list.length} / ${maxRanges} 段）`)),
+        h('div', { className: 'qqai-times' },
+          list.length === 0 ? h('span', { className: 'qqai-unit' }, '（空 = 不会静默）') : null,
+          list.map((raw, index) => {
+            const pair = parseRange(raw)
+            // 解析不出来的老写法（比如带中文、全角冒号）原样显示，别默默当成"空"
+            if (!pair) return h('div', { className: 'qqai-time', key: index }, h('span', { className: 'qqai-time-raw' }, `${raw}（看不懂 H:MM-H:MM，改掉它）`))
+            return h('div', { className: 'qqai-time', key: index },
+              h('input', {
+                // ⚠️ 时间输入框**不跟冷却一起禁用**（v0.6.8）：改一段要动"开始 + 结束"两个框，
+                //    如果第一下就把它们变灰 3 秒，用户根本改不完一段——这比"多点一次"更烦。
+                className: 'qqai-time-input', type: 'time', value: pair.start,
+                'aria-label': `${row.label}第 ${index + 1} 段开始`, onChange: (event) => edit(index, 'start', event.target.value),
+              }),
+              h('span', { className: 'qqai-time-dash' }, '–'),
+              h('input', {
+                className: 'qqai-time-input', type: 'time', value: pair.end,
+                'aria-label': `${row.label}第 ${index + 1} 段结束`, onChange: (event) => edit(index, 'end', event.target.value),
+              }),
+              h('button', {
+                className: 'qqai-time-del', type: 'button', disabled: busy === true,
+                title: '删掉这一段', 'aria-label': `${row.label}第 ${index + 1} 段：删除`,
+                onClick: () => commit(list.filter((unused, at) => at !== index)),
+              }, '×'))
+          }),
+          h('button', {
+            className: 'qqai-time-add', type: 'button', disabled: busy === true || list.length >= maxRanges,
+            title: list.length >= maxRanges ? `最多 ${maxRanges} 段` : '加一段 09:00–12:00，再点开改时间',
+            onClick: () => commit([...list, '09:00-12:00']),
+          }, `+ 加一段（${list.length}/${maxRanges}）`)))
+    }
+
+    /**
+     * 号码列表行（v0.6.8，白名单 `allowUsers` / `allowGroups`）。
+     *
+     * 每一条显示成一个号码 chip（`×` 删掉），最下面一个输入框 + 「+ 添加」：
+     *   - 只收数字（输入框里非数字直接过滤掉），提交时转成 **Number**——schema 是 `z.array(z.number())`，
+     *     写成字符串的话 `#allowed()` 的 `includes` 永远匹配不上（这是白名单最容易踩的坑）；
+     *   - 加完立刻写入（走同一条"乐观更新 + 3 秒冷却 + 自动刷新"，服务端会校验/去重）。
+     */
+    function ListRow({ row, busy, onSet, bridge }) {
+      const list = Array.isArray(row.value) ? row.value : []
+      const maxItems = Number.isFinite(row.maxItems) ? row.maxItems : 50
+      const defList = Array.isArray(row.defaultValue) ? row.defaultValue : null
+      const [draft, setDraft] = React.useState('')
+      const full = list.length >= maxItems
+      /**
+       * ★ v0.6.8「快捷加入」：从**最近来信**里挑（运行快照的 `recentChats`），一键加进白名单——
+       * 不用让用户自己去查 QQ 号/群号（这也是最容易填错的一步）。
+       */
+      const kind = row.key === 'allowGroups' ? 'group' : 'user'
+      const suggestions = (Array.isArray(bridge?.recentChats) ? bridge.recentChats : [])
+        .filter((item) => item && item.kind === kind && Number.isInteger(item.id) && !list.includes(item.id))
+        .slice(0, 4)
+      const add = () => {
+        const num = Number(String(draft).trim())
+        if (!Number.isInteger(num) || num <= 0) return
+        setDraft('')
+        if (list.includes(num)) return
+        onSet(row.key, [...list, num])
+      }
+      return h('div', { className: 'qqai-row' },
+        h('div', { className: 'qqai-text' },
+          h('label', { className: 'qqai-label' }, row.label,
+            row.pending === true ? h('span', { className: 'qqai-badge', title: '已写入配置，正在等宿主应用（一般 2–3 秒）；期间显示的就是刚改的值' }, '更新中') : null,
+            defList !== null
+              ? h('span', {
+                className: 'qqai-need',
+                title: `出厂默认：${defList.length === 0 ? '（空）' : defList.join(' / ')}`
+                  + (row.nonDefault === true ? '（你改过）' : '（与出厂一致）'),
+              }, `默认：${defList.length === 0 ? '空' : `${defList.length} 条`}`)
+              : null,
+            row.needs ? h('span', { className: 'qqai-need', title: '这个功能要额外准备的东西' }, row.needs) : null),
+          row.hint ? h('span', { className: 'qqai-hint', title: row.hint }, richText(row.hint)) : null,
+          // ★ v0.6.8：上面的「回应所有人」开着时，这个名单不生效——必须标出来，
+          //   否则用户会以为"我加了人怎么还是谁都回"。
+          row.inactive === true
+            ? h('span', { className: 'qqai-inactive' }, `⚠️ ${row.inactiveReason || '上面的开关开着，这个名单不起作用'}`)
+            : null,
+          h('span', { className: 'qqai-key' }, `${row.key}（${list.length} / ${maxItems} 条）`)),
+        h('div', { className: 'qqai-list' },
+          list.length === 0 ? h('span', { className: 'qqai-unit' }, '（空 = 全部拒绝）') : null,
+          list.map((item, index) => h('div', { className: 'qqai-chip', key: index },
+            h('span', { className: 'qqai-chip-text' }, String(item)),
+            h('button', {
+              className: 'qqai-time-del', type: 'button', disabled: busy === true,
+              title: '删掉这一条', 'aria-label': `${row.label}：删掉 ${item}`,
+              onClick: () => onSet(row.key, list.filter((unused, at) => at !== index)),
+            }, '×'))),
+          h('div', { className: 'qqai-time' },
+            h('input', {
+              className: 'qqai-list-input', type: 'text', inputMode: 'numeric', placeholder: 'QQ号 / 群号',
+              value: draft, disabled: busy === true || full,
+              'aria-label': `${row.label}：要添加的号码`,
+              // 只留数字：QQ 号/群号都是纯数字，粘进来带空格或符号也能用。
+              onChange: (event) => setDraft(String(event.target.value).replace(/[^0-9]/g, '').slice(0, 12)),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') add()
+                if (event.key === 'Escape') setDraft('')
+              },
+            }),
+            h('button', {
+              className: 'qqai-time-add', type: 'button',
+              disabled: busy === true || full || draft === '',
+              title: full ? `最多 ${maxItems} 条` : '加进白名单',
+              onClick: add,
+            }, `+ 添加（${list.length}/${maxItems}）`)),
+          suggestions.length > 0
+            ? h('div', { className: 'qqai-suggest' },
+              h('span', { className: 'qqai-unit' }, '最近来信：'),
+              suggestions.map((item) => h('button', {
+                className: 'qqai-time-add', type: 'button', key: `sug-${item.id}`,
+                disabled: busy === true || full,
+                title: `${item.id} 最近给机器人发过消息 —— 点一下加进白名单`,
+                onClick: () => onSet(row.key, [...list, item.id]),
+              }, `+ ${item.id}`)))
+            : null))
+    }
+
+    /**
+     * 桥的连接状态一行（v0.6.8）。
+     *
+     * 用户 2026-10-19「为啥登陆了以后没有任何反馈啊」「但是能登上 NapCat」——NapCat 那边登录成功，
+     * 面板却什么都看不出来。这一行读的是插件自己的运行快照（`qq-runtime.json`）：
+     *   - 桥在不在跳（快照 30 秒内有没有更新）；
+     *   - 最近一条**入站**消息是什么时候（有它 = QQ 那边真的连上了）；
+     *   - 最近一条消息**为什么没回**（白名单 / 静默 / 限流……）。
+     */
+    function agoText(seconds) {
+      if (!Number.isFinite(seconds)) return ''
+      if (seconds < 90) return `${Math.round(seconds)} 秒前`
+      if (seconds < 5400) return `${Math.round(seconds / 60)} 分钟前`
+      return `${Math.round(seconds / 3600)} 小时前`
+    }
+
+    function BridgeLine({ bridge }) {
+      if (!bridge) return null
+      // 只有"快照文件都没有"才算没跑起来：快照是按需写的，空闲时几分钟不更新很正常。
+      if (bridge.present !== true) {
+        return h('div', { className: 'qqai-bridge off' },
+          `桥：还没有运行快照${bridge.reason ? ` —— ${bridge.reason}` : ''}`)
+      }
+      const parts = ['桥：已连接']
+      if (bridge.botOnline === true) parts.push('账号在线')
+      else if (bridge.botOnline === false) parts.push('账号离线')
+      if (bridge.lastInboundAgoSeconds !== null && bridge.lastInboundAgoSeconds !== undefined) {
+        parts.push(`最近收到消息 ${agoText(bridge.lastInboundAgoSeconds)}`)
+      } else {
+        parts.push('还没收到过任何消息')
+      }
+      const blocked = bridge.topReason
+      const head = parts.join(' · ')
+      // 有拦截原因就变琥珀色并写清原因；否则空闲太久也只是补一句"没活动"，不当成故障。
+      const idle = !blocked && Number(bridge.ageSeconds) > 120 ? `（${agoText(bridge.ageSeconds)}没有活动）` : ''
+      return h('div', {
+        className: `qqai-bridge ${blocked ? 'warn' : 'ok'}`,
+        title: `运行快照：${bridge.file ?? ''}（有事件才写）`,
+      }, blocked
+        ? `${head} —— 最近被拦下：${bridge.topReason.reason}（${bridge.topReason.count} 次）`
+        : `${head}${idle}`)
     }
 
     /**
@@ -416,15 +741,19 @@ window.__ModuleLoader__.load({
             : null))
     }
 
-    function Group({ group, busy, onSet }) {
+    function Group({ group, busy, onSet, bridge }) {
       const note = group.note ? h('div', { className: 'qqai-note' }, richText(group.note)) : null
-      // 三种行混排：布尔 / 数值 / 「开关 + 数值」合并行，按 `row.type` 分派（服务端载荷里都带 type）。
+      // 五种行混排：布尔 / 数值 / 「开关 + 数值」合并行 / 时段列表 / 号码列表，按 `row.type` 分派。
       const body = h('div', null, note, group.rows.map((row) => (
         row.type === 'switchNumber'
           ? h(SwitchNumberRow, { key: row.key, row, busy, onSet })
-          : row.type === 'number'
-            ? h(NumberRow, { key: row.key, row, busy, onSet })
-            : h(Row, { key: row.key, row, busy, onSet })
+          : row.type === 'times'
+            ? h(TimesRow, { key: row.key, row, busy, onSet })
+            : row.type === 'list'
+              ? h(ListRow, { key: row.key, row, busy, onSet, bridge })
+              : row.type === 'number'
+                ? h(NumberRow, { key: row.key, row, busy, onSet })
+                : h(Row, { key: row.key, row, busy, onSet })
       )))
       if (group.advanced !== true) {
         return h('div', { className: 'qqai-group' },
@@ -463,39 +792,145 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function QqAiPanel() {
-      const [state, setState] = useState({ status: 'loading', data: null, error: '', flash: '', busyKey: '', busyAction: '', qrStamp: Date.now(), watchingQr: false })
+    /** 写入值的人话显示：布尔说"开/关"，数值直接写，时段说"N 段"。 */
+    function shownValue(value) {
+      if (Array.isArray(value)) return `${value.length} ${value.every((item) => typeof item === 'number') ? '条' : '段'}`
+      if (typeof value === 'number') return String(value)
+      return value ? '开' : '关'
+    }
 
-      const load = useCallback(async () => {
+    /**
+     * 待写队列 + 合并计时器（v0.6.8「连续开几个开关鬼畜」的修法，见 QqAiPanel.flushQueue）：
+     * 放在工厂作用域（不是组件里），这样多次渲染共用同一份队列。
+     */
+    const pendingWrites = new Map()
+    let flushTimer = null
+    let flushing = false
+    /** 写完之后"变灰不许按"的时长：要盖住宿主热重载（实测 ~2.3 秒）。 */
+    const COOLING_MS = 3000
+    let coolTimer = null
+
+    function QqAiPanel() {
+      const [state, setState] = useState({ status: 'loading', data: null, error: '', flash: '', busyKey: '', busyAction: '', qrStamp: Date.now(), watchingQr: false, refreshing: false, cooling: false })
+
+      /**
+       * 拉一次面板。
+       *
+       * `announce`：只有**用户点「刷新」**时才为真——按钮要变成「刷新中…」，成功后还要回一句
+       * "已刷新：N 组 / M 行 · 宿主 vX.Y.Z"。为什么要有这句（v0.6.8）：以前点刷新，
+       * 成功时界面**一个像素都不变**（载荷一样就什么都不动），看起来就像按钮坏了；
+       * 而后台自动轮询（盯二维码）不该弹提示，所以只有手动刷新才 announce。
+       *
+       * 载荷一律先过 `applyOptimistic`：还有没生效的本地写入时，把它们盖回去——
+       * 否则"写完 3 秒自动刷新"若碰上宿主还没重载完，界面会**退回旧值**（用户 2026-10-19
+       * 「为啥静默时段还是需要刷新」）。
+       */
+      const load = useCallback(async (options) => {
+        const announce = options?.announce === true
+        if (announce) setState((prev) => ({ ...prev, refreshing: true }))
         try {
-          const data = await callJson('/qqai/panel')
+          const data = applyOptimistic(await callJson('/qqai/panel'))
+          const groups = Array.isArray(data?.groups) ? data.groups : []
+          const rowCount = groups.reduce((sum, group) => sum + (Array.isArray(group.rows) ? group.rows.length : 0), 0)
           // 保留 qrStamp（用它做二维码的防缓存参数），其余按新载荷覆盖。
-          setState((prev) => ({ ...prev, status: 'ready', data, error: '', flash: '', busyKey: '' }))
+          setState((prev) => ({
+            ...prev,
+            status: 'ready',
+            data,
+            error: '',
+            flash: announce ? `已刷新：${groups.length} 组 / ${rowCount} 行 · 宿主 v${data?.pluginVersion ?? '?'}` : '',
+            busyKey: '',
+            refreshing: false,
+          }))
         } catch (error) {
-          setState((prev) => ({ ...prev, status: 'error', data: null, error: String(error?.message ?? error), flash: '', busyKey: '' }))
+          setState((prev) => ({ ...prev, status: 'error', data: null, error: String(error?.message ?? error), flash: '', busyKey: '', refreshing: false }))
         }
       }, [])
 
       useEffect(() => { void load() }, [load])
 
-      const toggle = useCallback(async (key, value) => {
-        setState((prev) => ({ ...prev, busyKey: key, error: '', flash: '' }))
+      /**
+       * **合并写入**（v0.6.8，用户 2026-10-19「连续开了几个开关以后就会鬼畜」）：
+       *   每写一个键宿主就要热重载一次（实测 ~2.3 秒），连点几个开关 = 几次重载互相打断 ⇒ 面板鬼畜。
+       *   所以点击只进"待写队列"，350ms 内的多次点击**合成一次批量写入**（`/qqai/panel/set-batch`），
+       *   一次写盘 ⇒ 宿主只重载一次。点完界面立刻变（乐观更新，开关自带官方那种滑动动画）。
+       *
+       * ⚠️ 写完**不自动轮询**（用户 2026-10-19「还是改成玩家进行手动刷新」）：
+       *   生效与否由用户点「刷新」自己看——在这之前那一行会带「更新中」徽标，状态是诚实的。
+       */
+      const flushQueue = useCallback(async () => {
+        if (pendingWrites.size === 0 || flushing === true) return
+        const entries = [...pendingWrites.entries()].map(([key, value]) => ({ key, value }))
+        pendingWrites.clear()
+        flushing = true
+        setState((prev) => ({ ...prev, busyKey: entries[0].key, error: '' }))
         try {
-          const result = await callJson('/qqai/panel/set', { method: 'POST', body: JSON.stringify({ key, value }) })
-          // 布尔行说"开/关"，数值行说"→ 7"（同一个 setter，两种显示）。
-          const shown = typeof value === 'number' ? String(value) : (value ? '开' : '关')
-          setState({
+          const result = entries.length === 1
+            ? await callJson('/qqai/panel/set', { method: 'POST', body: JSON.stringify(entries[0]) })
+            : await callJson('/qqai/panel/set-batch', { method: 'POST', body: JSON.stringify({ entries }) })
+          let data = result.panel ?? state.data
+          // 写成功了：值记进"未生效"表，之后每次拉载荷都会把它盖回去，直到宿主真的用上。
+          if (result.changed === true) for (const item of entries) optimisticValues.set(item.key, item.value)
+          for (const item of entries) data = applyWrittenValue(data, item.key, item.value)
+          const label = entries.length === 1 ? `${entries[0].key} → ${shownValue(entries[0].value)}` : `${entries.length} 个开关`
+          /**
+           * ⚠️ 必须用**函数式**更新（`(prev) => ({ ...prev, … })`）。
+           * 这里以前写成 `setState({ status: 'ready', … })` —— React 的 `setState(object)` 是**整对象替换**，
+           * 会把 `cooling`（还有 qrStamp / watchingQr）一起抹掉 ⇒ 350ms 时控件就"又亮了"，
+           * 3 秒的冷却形同虚设（用户 2026-10-19「不是灰三秒吗？为啥一下就亮了」）。
+           */
+          setState((prev) => ({
+            ...prev,
             status: 'ready',
-            data: result.panel ?? state.data,
+            data,
             busyKey: '',
             busyAction: '',
             error: '',
-            flash: `${key} → ${shown}${result.changed === true ? '（已写入配置）' : '（无需改动）'}${result.note ? ' · ' + result.note : ''}`,
-          })
+            flash: `${label}${result.changed === true
+              ? `（已写入配置，${COOLING_MS / 1000} 秒内先别动，之后自动刷新…）`
+              : '（无需改动）'}`,
+          }))
         } catch (error) {
-          setState((prev) => ({ ...prev, busyKey: '', error: `写入失败：${String(error?.message ?? error)}` }))
+          // 写失败：把这几个键从"未生效"表里撤掉（否则界面会一直显示一个没写进去的值），
+          // 立刻解锁（不必等那 3 秒），并把面板拉回真实状态。
+          for (const item of entries) optimisticValues.delete(item.key)
+          if (coolTimer !== null) { clearTimeout(coolTimer); coolTimer = null }
+          setState((prev) => ({ ...prev, busyKey: '', cooling: false, error: `写入失败：${String(error?.message ?? error)}` }))
+          void load()
+        } finally {
+          flushing = false
         }
-      }, [state.data])
+      }, [load, state.data])
+
+      /**
+       * 点一下开关（**启用或关闭都一样**）：
+       *   ① 立刻改本地状态（乐观更新，开关带官方那种滑动动画）；
+       *   ② **马上变灰锁 3 秒**（`COOLING_MS`）——期间所有开关/数字/按钮不可点；
+       *   ③ 350ms 后把这一下（或这几下）合成一次写入；
+       *   ④ 3 秒到了自动刷新一次，拿回重载后的真实值。
+       * 为什么锁 3 秒：实测宿主应用 patch 要 ~2.3 秒（重载插件 + 重挂路由）。锁住就不会"重载没完
+       * 又点下一个开关 ⇒ 几次重载互相打断"的鬼畜；刷新的那一次正好把「更新中」抹掉。
+       */
+      const toggle = useCallback((key, value) => {
+        pendingWrites.set(key, value)
+        // 记进"未生效"表：这 350ms + 之后的 3 秒里若有人点「刷新」，界面也不会退回旧值。
+        optimisticValues.set(key, value)
+        setState((prev) => ({
+          ...prev,
+          error: '',
+          cooling: true,
+          flash: `${key} → ${shownValue(value)}（已改，${COOLING_MS / 1000} 秒内先别动，之后自动刷新…）`,
+          data: applyWrittenValue(prev.data, key, value),
+        }))
+        if (coolTimer !== null) clearTimeout(coolTimer)
+        coolTimer = setTimeout(() => {
+          coolTimer = null
+          setState((prev) => ({ ...prev, cooling: false }))
+          void load({ announce: true })
+        }, COOLING_MS)
+        if (flushTimer !== null) clearTimeout(flushTimer)
+        flushTimer = setTimeout(() => { flushTimer = null; void flushQueue() }, 350)
+      }, [flushQueue, load])
 
       /**
        * 快捷操作（启动 NapCat / 重新登录）。
@@ -554,16 +989,37 @@ window.__ModuleLoader__.load({
       if (state.status === 'error') {
         return h('div', { className: 'qqai-wrap' },
           h('style', null, CSS),
-          h('div', { className: 'qqai-err' }, `读取面板失败：${state.error}`, h('div', null, '如果是刚装好插件，先重启一次 DSH 让路由挂上。')),
+          h('div', { className: 'qqai-err' }, `读取面板失败：${state.error}`, h('div', null, '如果是刚装好插件，先刷新一次页面；还不行再重启 DSH 让路由挂上。')),
           h('button', { className: 'qqai-retry', onClick: () => { setState({ status: 'loading', data: null, error: '', flash: '', busyKey: '' }); void load() } }, '重试'))
       }
 
       const data = state.data
+      /**
+       * 前端 bundle 落后于宿主：浏览器只在**页面加载时**取一次 bundle，插件更新后当前页面还攥着旧的那份。
+       * 与其让人对着没变化的界面猜，不如直接说出来并给一个按钮（一次性动作，不需要重启 DSH）。
+       */
+      const hostVersion = typeof data.pluginVersion === 'string' ? data.pluginVersion : ''
+      const staleClient = hostVersion !== '' && hostVersion !== '?' && hostVersion !== CLIENT_VERSION
       return h('div', { className: 'qqai-wrap' },
         h('style', null, CSS),
+        staleClient
+          ? h('div', { className: 'qqai-stale' },
+            h('span', null, `面板前端还是 v${CLIENT_VERSION}，宿主已经是 v${hostVersion} —— 刷新一次页面即可（不用重启 DSH）`),
+            h('button', { type: 'button', onClick: () => { try { location.reload() } catch { /* 桌面端不允许就手动刷新 */ } } }, '刷新页面'))
+          : null,
         h('div', { className: 'qqai-head' },
-          h('span', { className: 'qqai-title' }, 'QQ助手'),
-          h('button', { onClick: () => void load(), disabled: state.busyKey !== '' }, '刷新')),
+          h('span', { className: 'qqai-title' }, 'QQ助手',
+            // 显示的版本 = **宿主里正加载的那份代码**（服务端在模块加载时读 package.json）。
+            // 它没变 ⇒ 说明宿主还在跑旧代码（页面上看不到新加的分组时，先看这里再决定要不要重载）。
+            typeof data.pluginVersion === 'string' && data.pluginVersion !== ''
+              ? h('span', { className: 'qqai-ver', title: '宿主当前加载的插件版本；点「刷新」看它有没有变' }, ` v${data.pluginVersion}`)
+              : null),
+          h('button', {
+            className: 'qqai-refresh',
+            onClick: () => void load({ announce: true }),
+            disabled: state.busyKey !== '' || state.refreshing === true || state.cooling === true,
+            title: '重新从宿主拉一次面板数据（会显示拉到了几组几行、宿主是哪一版）',
+          }, state.refreshing === true ? '刷新中…' : '刷新')),
         // 顶部第一块是「快捷操作」（启动 NapCat / 重新登录）——用户 2026-10-04："把快捷操作拉到相关链接上边"。
         // 理由也顺：没起来的时候，"把它启动起来"比"点开账号页"更该先看到。
         h(Actions, {
@@ -580,6 +1036,8 @@ window.__ModuleLoader__.load({
         }),
         // 紧接着是「相关链接」整组（第一条是账号入口）。
         h(Links, { links: data.links }),
+        // ★ v0.6.8：桥的连接状态（"登录了 NapCat 却一点反馈都没有"就靠这一行回答）。
+        h(BridgeLine, { bridge: data.bridge }),
         h('div', { className: 'qqai-meta' },
           `profile：${data.profile} · 配置文件：${data.patchFile}${data.patchExists === false ? '（不存在）' : ''}`),
         h('div', { className: 'qqai-meta' }, data.notes?.apply ?? ''),
@@ -587,7 +1045,7 @@ window.__ModuleLoader__.load({
         state.flash ? h('div', { className: 'qqai-flash' }, state.flash) : null,
         state.error ? h('div', { className: 'qqai-err' }, state.error) : null,
         (Array.isArray(data.warnings) ? data.warnings : []).map((text, index) => h('div', { key: `warn-${index}`, className: 'qqai-warn' }, `⚠️ ${text}`)),
-        data.groups.map((group) => h(Group, { key: group.id, group, busy: state.busyKey !== '', onSet: toggle })),
+        data.groups.map((group) => h(Group, { key: group.id, group, busy: state.busyKey !== '' || state.cooling === true, onSet: toggle, bridge: data.bridge })),
       )
     }
 

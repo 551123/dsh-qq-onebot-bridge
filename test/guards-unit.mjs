@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { QQBridge } from '../lib/bridge.js'
+import { QQBridge, allowsChat } from '../lib/bridge.js'
 
 let passed = 0
 let failed = 0
@@ -221,6 +221,32 @@ config.filterEnabled = true
 writeFileSync(wordsFile, '新敏感词\n', 'utf8')
 const reloaded = await send(groupMessage('这里出现新敏感词'))
 check('词表改动后热重载', reloaded.includes('敏感词'), reloaded.trim())
+
+/**
+ * ★ v0.6.8（用户 2026-10-20「不需要添加白名单的功能，会理会所有的群聊和会话，但是群聊还是要 @ 的」）：
+ *   白名单判定抽成纯函数 `allowsChat`，这里把矩阵钉死。
+ *   ⚠️ "群里仍然要 @" 是 `replyOnlyWhenMentioned` 的事，**不在**这个函数里——所以这里只确认放行/拒绝。
+ */
+{
+  const base = { allowUsers: [1001], allowGroups: [2002], allowAllChats: false }
+  const priv = (userId) => ({ messageType: 'private', userId })
+  const grp = (groupId, userId) => ({ messageType: 'group', groupId, userId })
+  check('白名单：私聊命中放行、没命中拒绝',
+    allowsChat(base, priv(1001)) === true && allowsChat(base, priv(1003)) === false)
+  check('白名单：群命中放行；成员不在 allowUsers 时拒绝；群不在 allowGroups 时拒绝',
+    allowsChat(base, grp(2002, 1001)) === true
+    && allowsChat(base, grp(2002, 1003)) === false
+    && allowsChat(base, grp(9999, 1001)) === false)
+  check('白名单全空 = 全部拒绝（安全默认）',
+    allowsChat({ allowUsers: [], allowGroups: [], allowAllChats: false }, priv(1001)) === false
+    && allowsChat({ allowUsers: [], allowGroups: [], allowAllChats: false }, grp(2002, 1001)) === false)
+  check('★回应所有人：所有私聊与所有群都放行（名单为空也一样）',
+    allowsChat({ allowUsers: [], allowGroups: [], allowAllChats: true }, priv(1003)) === true
+    && allowsChat({ allowUsers: [], allowGroups: [], allowAllChats: true }, grp(9999, 1003)) === true)
+  check('回应所有人不影响"验证期答题放行"的语义（verifyPending 仍按实参走）',
+    allowsChat({ allowUsers: [], allowGroups: [], allowAllChats: false }, priv(1004), { verifyPending: true }) === true
+    && allowsChat({ allowUsers: [], allowGroups: [], allowAllChats: false }, priv(1004), { verifyPending: false }) === false)
+}
 
 bridge.stop()
 rmSync(dir, { recursive: true, force: true })
