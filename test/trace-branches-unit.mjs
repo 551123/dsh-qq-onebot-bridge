@@ -156,7 +156,21 @@ async function boot(overrides = {}) {
   /** All trace events recorded for a given reason substring. */
   const findReason = (needle) => bridge.trace.recent({ limit: 500 }).filter((event) => (event.reason ?? '').includes(needle))
   const findStage = (stage) => bridge.trace.recent({ limit: 500 }).filter((event) => event.stage === stage)
-  return { bridge, server, send, notice, request, findReason, findStage, sessions, emitSession }
+  /**
+   * 等到某个 reason 真的出现（最多 timeoutMs）。
+   * 为什么需要：`send()` 只睡固定的 settle 毫秒，跑全量时机器一忙就**睡不够**，
+   * 于是"静默时段留下 reason"这条会偶发失败（2026-10-25 全量里真出现过一次）。
+   * 断言前用它兜一下，测试就不再依赖机器当时有多空闲。
+   */
+  const waitForReason = async (needle, { timeoutMs = 2000, stepMs = 20 } = {}) => {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < timeoutMs) {
+      if (findReason(needle).length > 0) return true
+      await new Promise((resolve) => setTimeout(resolve, stepMs))
+    }
+    return findReason(needle).length > 0
+  }
+  return { bridge, server, send, notice, request, findReason, findStage, waitForReason, sessions, emitSession }
 }
 
 // ---- 1) 白名单静默丢弃 ----
@@ -173,6 +187,8 @@ async function boot(overrides = {}) {
 {
   const h = await boot({ quietHoursEnabled: true, quietHours: ['0:00-23:59'], quietWeekendExempt: false })
   await h.send('在吗')
+  // 断言前等它真的落进 trace（固定 settle 在忙的时候不够，见 waitForReason 的注释）
+  await h.waitForReason('避开高峰期静默中')
   check('静默时段留下 reason', h.findReason('避开高峰期静默中').length === 1, JSON.stringify(h.findReason('避开高峰期静默中')[0]?.reason))
   h.bridge.stop()
 }

@@ -2,30 +2,6 @@
 
 A bidirectional QQ ↔ DeepSeek Harness bridge plugin (independent bundle). QQ messages drive DSH agent sessions directly, and agent replies are sent back to QQ automatically.
 
-> **v0.4.0 theme: Everything Debuggable.** One trace id per message, a Chinese reason attached to every silent drop, any recorded message replayable offline through the real pipeline, synthetic events injectable into the live pipeline — and all 6 hard constraints are continuously verifiable in the bundled console (see [Debugging](#debugging-v04-everything-debuggable) and [Hard-constraint acceptance page](#hard-constraint-acceptance-page-v04-phase-4)).
-
-## Feature overview
-
-> **Only the last two major lines are listed here** (v0.5 and v0.4). Everything older — the two-way message bridge, session resume, persistent memory, reminders, the group-management suite, TTS, image generation, daily check-in, the points economy and mini-games, anti-recall, sensitive-word filtering … — **is still there**: see [CHANGELOG.md](CHANGELOG.md) for the per-release record and the configuration reference below for the switches.
-
-**v0.5 line**
-
-- **See it (v0.5.0)**: merged-forward ("chat record") cards are no longer dropped silently — `get_forward_msg` expands them into a transcript for the model; capabilities that were already implemented but never wired up are live: `/成员` (roster & details), `/群信息`, `/好友` (off by default), `/退群` (off by default) and the `qq_recent_history` / `qq_member_info` / `qq_react` agent tools
-- **Find it (v0.5.0)**: `/文件`, `/文件 <folder>`, `/取 <name>` (downloads go to the requester's private chat only), `/相册`, `/ocr` (image → text); every message is archived per day under `cwd/qq-history/`, `/找 <keywords>` and the `qq_search_history` tool search the last N days (plus an "assets · history search" card in the console)
-- **Unattended (v0.5.2)**: an inbound webhook (`127.0.0.1:8798`, token or HMAC auth, rate-limited, 64 KiB cap) pushes external system events into a session; scheduled broadcasts (RSS / weather / Minecraft, managed with `/播报`); self-healing after disconnects (starts the process, never kills it, with a cooldown and an hourly cap)
-- **One tap (v0.5.3)**: the bot can poke (`/戳`) and poke back, show "typing…" in private chats, attach face reactions automatically, report reaction stats (`/赞榜`, `/谁赞了`), like messages (`/点赞`) and mark them read (real-device probe: this NapCat build cannot send inline buttons, so these degrade on a capability check)
-- **Group ops toolbox (v0.5.4)**: `/群打卡`, `/全体余量`, `/禁言名单`, `/群详细`, `/入群通知`, `/批量踢` (two-step confirmation, batched), `/待办` `/完成待办` `/取消待办`, `/移动文件` `/重命名文件` `/删文件` `/新建文件夹`, `/传图`, `/群名` `/群备注`, `/群权限`, `/历史可见`, `/周报`
-- **Console visibility (v0.5.5)**: performance panel (P50/P95), scheduled-job panel, group settings page, replay diff, and an injection scenario library (17 one-click scenarios)
-- **Group admin and request catch-up (v0.5.8)**: `/设管理` and `/撤管理` (`enable` is **always explicit** — the probe showed that omitting it demotes the member), `/邀请策略` (the four documented literals), `/加群方式 1–5` (only 4/5 carry a question/answer) and `/打卡名册`; `/申请` pulls the join requests, invites and doubtful friend requests **missed while nobody was watching** into the approval queue (`request_id` is the very `flag` approval needs, so pulled requests really can be approved); the bot also records its own admin state and, once demoted, answers write commands with the true reason and zero calls (`/群搜索` is deliberately not implemented because NapCat documents no meaning for its parameters)
-- **DSH 0.2 and desktop-client compatibility (v0.5.9)**: peer ranges now accept `^0.2.0-rc.2` (the CLI/web host and the Electron desktop client run the **same runtime**, so both install it with no exemption); and when the OneBot port is already taken the bridge **no longer crashes or blocks host startup** — it reports the true reason and retries every 15 seconds, **taking over automatically** once the port frees (one instance per machine hosts the QQ bridge)
-- Patch releases add no features: v0.5.1 audit fixes, v0.5.6 real-machine startup fixes plus a full audit, v0.5.7 docs only (details in [CHANGELOG.md](CHANGELOG.md))
-
-**v0.4 line**
-
-- **Everything Debuggable (v0.4.0)**: all 6 hard constraints landed and stay verifiable in the console — (1) a Chinese reason on every silent drop, (2) one trace id through the whole pipeline, (3) replay any recorded message offline, (4) one-click health check, (5) export a redacted diagnostic bundle, (6) inject synthetic events; every message also flows through structured events and an SSE live event stream
-- **Bundled console (v0.4.0)**: `control/` (port 8799) — session list, live event stream, trace lookup, health report, diagnostic export, recording and offline replay, event injection, and the hard-constraint acceptance page
-- **Dependency fix (v0.4.1)**: switched to `@deepseek-ai/schemastery`, fixing a clean-environment install (issue #1)
-
 ## Architecture
 
 ```
@@ -73,7 +49,7 @@ Installation is the same, through the desktop client's plugin manager:
 
 After installing the plugin and **restarting the host once** (so the panel routes mount): **DSH → Settings → QQ助手**.
 
-- **Six everyday groups are laid out directly**: **AI account & allowlists** / chat basics / **limits: inbound / outbound** / **quiet hours** / group-ops toolbox / fun & interaction / voice & media; safety, record & notify and advanced start collapsed under "advanced". 10 groups, **62 switches + 10 numeric fields + 1 time-range list + 2 allowlists**, curated from 225 config keys.
+- **Six everyday groups are laid out directly**: **AI account & allowlists** / chat basics / **limits: inbound / outbound** / **quiet hours** / group-ops toolbox / fun & interaction / voice & media; safety, record & notify, experimental and advanced start collapsed under "advanced". 11 groups, **65 switches + 11 numeric fields + 1 time-range list + 2 allowlists**, curated from 225 config keys; a **search box** at the top filters by Chinese label / config key.
   - The two rate limits share one group, ordered the way the pipeline runs, precisely so they are not confused: **per-minute inbound turn cap** (drops the message *before* it reaches the model, saving quota) versus **outbound reply rate limit** (the model already answered; the reply is dropped *before it is sent*, protecting against QQ-side throttling). Both are **off by default** and can be enabled independently.
   - **Quiet hours (v0.6.8)**: the feature existed but could only be reached by editing YAML; the whole thing is now in the panel — the switch, **weekend exemption**, and the **quiet-window list** (two native time inputs per window, overnight ranges such as `22:00-6:00`, up to 8 windows).
   - **AI account & allowlists (v0.6.8)**: this group answers "which bot account is this, and who does it answer" — the **AI account** (`botQq`, used for @-detection and pokes), **no allowlist (answer everyone)**, the two gate switches, and the `allowUsers` / `allowGroups` lists (**an empty list denies everything**). Turning "no allowlist" on makes the bot answer **every private chat and every group**, while **the @ requirement in groups stays** (that is `replyOnlyWhenMentioned`). The lists used to be YAML-only; they are edited in the panel now (input plus an add button, numbers written as **numbers** because string ids would never match), with a one-click "recent chats" shortcut, and both list rows are marked as inactive while "no allowlist" is on.
@@ -296,6 +272,57 @@ Notes:
 - Dropping image files into `cwd/qq-faces/` registers them as sendable stickers automatically (file name = sticker name); deleting a file removes it
 - With `autoCollectStickers=true`, image stickers from incoming messages are collected automatically
 
+## Extension seams (v0.7.0)
+
+Other plugins in the same host can send a message, observe traffic and add tools **without patching this plugin** —
+but there is no second path around the guards:
+
+```js
+// ① instance outlet (mounted as ctx.qqBridge; import { getExtensionApi } as a fallback)
+const r = await ctx.qqBridge.sendText('g:123456', 'hello')   // { ok, reason, chatKey }
+await ctx.qqBridge.sendImage('u:1001', '/abs/pic.png', 'caption')
+ctx.qqBridge.sessions()   // [{ chatKey, sessionId, turnActive }] (read-only copy)
+ctx.qqBridge.config()     // snapshot with token / apiKey / secret / password / cookie redacted
+
+// ② read-only events (ctx.on or api.on; returns an unsubscribe function)
+ctx.on('qqbridge:inbound',  (e) => console.log(e.chatKey, e.text))
+ctx.on('qqbridge:outbound', (e) => console.log(e.chatKey, e.kind, e.text))
+
+// ③ experimental: tool providers (requires the panel's Experimental switch)
+ctx.qqBridge.registerToolProvider(({ agentCtx, route, key, config }) => ({
+  tools: [ /* whatever defineTool(...) returned */ ],
+  sections: [ /* { name?, order?, text } */ ],
+}), { name: 'my-plugin' })
+```
+
+- **Every send reuses the existing guards** (outbound rate limit, injection suppression, splitting, merged-forward, path
+  resolution, ActionGate quota, TTS availability) **and additionally checks the destination allowlist** — otherwise a third
+  party could proactively message people/groups outside the allowlist, and QQ risk control would hit the bot's own account.
+- **Inbound events fire after allowlist / quiet hours / dedup and before commands and the model**, so listening can never
+  bypass the gates; the text is already normalised.
+- **Read-only**: events cannot rewrite or block anything, and a throwing/rejecting listener only logs debug.
+- **Tool providers are experimental and off by default**: additive only (the 10 built-in `qq_*` tools cannot be
+  overridden), a throwing provider is skipped alone, caps of 8 tools / 4 sections per provider and 24 / 12 in total,
+  and everything injected or skipped is traced. **Third-party extension behaviour is outside this project's support scope.**
+- Deliberately not implemented: rewritable/blockable events, multi-account, vector memory.
+
+### Compatibility promise (how these interfaces may change)
+
+Once something is public and used, it cannot be renamed casually — so the rules are written down here:
+
+- **Additive only**: a new method, a new event field, a new return field → **no version bump**; existing callers keep working.
+- **Renaming or reshaping** (renaming, reordering parameters, changing what a return value means, sync→async…) →
+  **bump `version`** (currently `1`) and keep the old one for **at least one minor release**, marked `deprecated` here.
+- **Events stay read-only**: no "can rewrite / can block" return value will ever be added to `inbound` / `outbound`.
+- **You can see whether anyone uses it — without it looking like telemetry**: only once the outlet has actually been
+  called does the panel's Experimental group add a line
+  `outlet calls (local counter: kept in memory only, no message content, never sent anywhere, reset on restart): sendText N · …`.
+  When every count is zero the line is **not shown at all**. It is never written to disk, never enters `qq-runtime.json`,
+  never triggers a request, and the panel is served by the local host only — in other words, **it counts whether a plugin
+  called this API, not what you are doing**. All zero means nobody uses it, so a breaking change costs nothing; as soon as
+  there is a number, the three rules above apply.
+- Internals (private methods, file formats, trace fields) are **not** covered — they may change freely.
+
 ## Commands & debugging
 
 - `/new`: end the current session and start a fresh one
@@ -441,7 +468,7 @@ npm run control            # or: node control/bin/qq-control.mjs --open
 ```sh
 # 1) unit tests: no network, no host, pure logic in temp dirs (run after every change)
 node test/control-unit.mjs        # or one at a time: node test/<name>-unit.mjs
-#    60 files: bridge branches/commands/guards, console HTTP + diagnosis, recording/replay/injection,
+#    61 files: bridge branches/commands/guards, console HTTP + diagnosis, recording/replay/injection,
 #    injection safety boundaries, the hard-constraint acceptance page, the `/why` decision-chain wording…
 #    run them all (PowerShell):
 #    Get-ChildItem test -Filter '*-unit.mjs' | ForEach-Object { node $_.FullName }
@@ -512,9 +539,10 @@ Debugging usually means sending logs to someone else, so the plugin is explicit 
 
 The five most recent versions (always kept rolling):
 
+- **v0.7.0** — "Experimental & Extensions": the extension points that were evaluated but left out of 0.6.x come back as **experiments, off by default**. ① **instance outlet `ctx.qqBridge`**: `sendText/sendImage/sendFile/sendVoice` speak as the bridge and **reuse the existing guards** (outbound rate limit, injection suppression, path resolution, ActionGate quota, TTS check) **plus a destination allowlist check**; read-only `sessions()/agents()/config()` snapshots (copies, secrets redacted); every outlet send is traced. ② **read-only events `qqbridge:inbound` / `qqbridge:outbound`**: observe only, never rewrite or block; inbound fires after allowlist/quiet-hours/dedup, outbound only after a message really went out and carries a `kind`. ③ **experimental tool-provider chain** (`registerToolProvider`, gated by `extensionToolsEnabled`, off by default): a plugin can add tools and prompt sections per session — additive only, a throwing provider is skipped alone, per-provider and total caps apply, and everything injected is traced; new **"Experimental (EXPERIMENTAL)"** panel group. New `test/extension-unit.mjs` (46 assertions), panel 78 → **79 keys**; **61 suites / 4075 assertions green**
 - **v0.6.9** — "Ask why, find it, quote it": three time-savers. ① **`/why`** (new command): quote a message and send `/为什么` (or `/为什么 <messageId>`, or nothing for the newest one; plain "为什么没回" works too) and the trace chain is rendered as `inbound ✅ → allowlist ✅ → quiet hours ⛔` plus "blocked at 「quiet hours」: …". Four shapes get honest wording (blocked / passed and replied / reached the model without an outbound reply / handled by a pre-model branch), admins only in groups, and the message text is never echoed. The wording is a pure `summarizeTrace()`; the spoken form lives in `lib/why.js` and only matches a whole sentence. ② **panel search box**: filter by Chinese label / config key / hint (pure front-end), keep a matching group whole, auto-expand "advanced" groups while searching, show "matched N groups / M rows", and say "try another word" on no hits. ③ **quote the message being answered** (`quoteReplyEnabled`, off by default, **groups only**): the first batch of a reply carries a native QQ `reply` segment; a failed quote is retried once without it; injected/replayed frames and replies without a message id never quote. Outbound has two paths (commands `#reply()` and model `assistant/message`) — both now go through `#quoteFor()`; the first cut missed the model path and a real-hardware regression caught it. New `test/why-unit.mjs` (17) and `test/quote-unit.mjs` (11), `settings-unit` 267 → **271**, panel 77 → **78 keys**; **60 suites / 4020 assertions green**
 - **v0.6.8** — "Quiet hours in the panel": quiet hours (`quietHoursEnabled` / `quietHours` / `quietWeekendExempt`) existed all along but could only be edited in YAML; the whole thing now lives in the panel — the **quiet-hours switch** (off by default), **weekend exemption** (on by default) and the **quiet-window list** (two native time inputs per window, overnight ranges such as `22:00-6:00`, up to 8 windows, an empty list meaning "never quiet"). Windows are normalised the way the engine parses them (`9:0-12:0` → `09:00-12:00`); identical start/end, out-of-range hours or unreadable text are rejected with a 400 that leaves the file untouched. The config keeps them as a flow sequence `["09:00-12:00","22:00-06:00"]`, which `readPatchValue` reads back — so the row can tell when its file value is newer than what the running plugin uses (that is the 「更新中」 badge: refresh the page once, no restart needed). Also fixed the "default" badge, which used to know only booleans (numeric and time-range defaults are now read from the schema too); the panel now **updates the click immediately, then greys out for 3 s and refreshes once automatically** (measured: the host needs ~2.3 s to apply a patch) instead of making you click twice; made **Refresh report what it did** ("refreshing…" then "refreshed: N groups · host vX") with the loaded plugin version shown next to the title — if a group you expect is missing, look there first; and **writes now work in profiles where the plugin is mounted by a bundle** (the profile's `cordis.patch.yml` may have no entry for it: the mount lives in the package's own bundle layer, so the panel appends a patch entry — `- id` / `name` / `config:` — at the end instead of refusing). The panel is **10 groups / 63 switches + 11 numeric fields + 1 time-range list + 2 allowlists**; `settings-unit` 213 → **267**; **58 suites / 3988 assertions green**
 - **v0.6.7** — "Configurable numbers": added the **per-minute turn cap** as a switch plus a value — `chatTurnLimitEnabled` (**OFF by default**) and `chatTurnsPerMinute` (1–10, **default 5**). While the switch is off nothing is limited, so busy groups behave exactly as before; once on, each chat may send at most that many messages to the model per minute, and anything beyond is dropped with a trace reason and never queued (different from the reply-rate limit, which caps how many replies go *out*). The panel also grew from switches-only to **numeric controls**: `− value +`, written on Enter/blur rather than per keystroke, with **ranges and steps read from the schema** (never duplicated) and out-of-range or fractional values rejected by the server with the allowed range in the reason. Every threshold the old hints told you to edit in the config file is now a control too — **10 numeric fields in total** (dedup window, the two reply-rate numbers, the four anti-flood thresholds, poke-per-hour, report window), so the panel is 60 switches + 10 numbers. Also: **injected/replayed frames no longer consume quota** (local debug traffic must not be squeezed out by real volume), `upsertPatchValue` accepts integers and writes them as number literals, a quoted `"7"` stays a string instead of pretending to be a number, and numeric rows fail closed when no range is known. New `ratelimit-unit` (12 assertions); `commands-unit` 78 → **83**, `settings-unit` 193 → **210**; **58 suites / 3925 assertions green**
 - **v0.6.6** — "Console freeze fixed": the console page locked up and accepted no input, with the browser showing "this page is not responding". Two causes, one at each end. ① **Server**: `/api/stream` built a fresh tailer per connection and its first poll replayed the trace tail **by bytes** (256 KiB) as individual events — a 254 KiB file here meant **1180 events in three seconds**; the first replay is now capped **by count** (the most recent 300), while explicit history still goes through `/api/trace?limit=`. ② **Client**: `onmessage` re-rendered the whole table per event (`renderStream()` rebuilds up to 400 rows of `innerHTML`, plus `updateErrPill()`), so 1180 events meant 1180 full rebuilds and a locked renderer; renders are now **coalesced** (`scheduleStreamRender`, at most one every 250 ms, so a burst is a single repaint). Measured on the same trace: **1180 events / 263 KB → 303 events / 68 KB**, client repaints **1180 → 1**. ③ Also fixed a misuse of the same feature: on the Desktop the host's `process.execPath` is **Electron itself**, and it used to be handed `control/bin/qq-control.mjs` directly — i.e. the script was treated as **an Electron app entry** (the live console process literally read `"…\DeepSeek Harness.exe" …\qq-control.mjs` and weighed 126 MB); it now spawns with `ELECTRON_RUN_AS_NODE=1` per the official docs (appended to, never replacing, the host environment), with CLI hosts unaffected. `console-debug-unit` 72 → **78**, `settings-unit` 189 → **193**; **57 suites / 3891 assertions green**
-- **v0.6.5** — "NapCat launch path fixed": the two symptoms from issue #2 are both fixed — ① after filling in the launch script it still answered "missing shim script path (shimFile)"; ② that `shimFile` could not be found in any folder (it is generated at launch time and never shipped). ① **The console's 启动 NapCat / 重启登录流程 had never once succeeded**: when v0.6.3 moved the launch onto a shim script it only updated the DSH panel's call site, so the console kept calling the launch planner with **no arguments** and always got that `shimFile` rejection; both paths now share one flow — the shim and log paths are derived from the **working directory** (`<cwd>\qq-napcat-launch.cmd` / `.log`), the shim is written first (creating the directory), then the elevated launch runs, and success is claimed only after the **shim heartbeat** appears (**a second cause on the same button** is fixed too: the console used to spawn powershell with `detached: true`, and on this machine **a detached powershell child simply never executes** — exit code 0, no output at all, not one line written by the shim; fixing only the path would have left users with the *wrong* diagnosis, "the elevation hop was blocked". Elevated commands now go through `spawnElevated`: no `detached`, stdout/stderr captured, so `QAI-ELEVATED`/`QAI-RUNAS` and any powershell error text reach the UI. Re-verified end to end on the real machine with a temporary console and a fake launcher: `ok:true / shimRan:true`, with both the heartbeat and the launcher output in the log). ② **The shim is no longer something users have to hunt for** (it is generated the moment the button is pressed and is not in the package): errors now name the file, its directory and who writes it, the file itself opens with a "do not look for this in the plugin folder" note, and `@echo off` moved to line one (otherwise those note lines get echoed into the elevated window). ③ Success is judged only by a heartbeat written **by this click** (a second click within 60 seconds can no longer reuse the previous one), and the UI no longer sends users to a UAC dialog that never appears on this machine. ④ **When `napcatBat` is unset, the panel now auto-detects just like the console always did** (one shared candidate table; both read the same config, so filling it once covers both), and the failure text says to point it at `bootmain\launcher.bat` rather than `napcat.bat`. ⑤ **"桥：无快照" now names its cause** — host not running / plugin not loaded (including the working-directory mismatch, the easiest one to hit) / snapshot stopped N minutes ago — with the full story on hover and the same two causes in the one-click diagnosis. ⑥ The console disables the button while waiting ("up to 8 seconds") so repeated clicks cannot spawn a second elevated process. Also fixed a **test-honesty** bug: `control-unit`'s summary and `process.exit` sat before four audit assertions, which had therefore never run while still printing "all green". `control-unit` 163 → **179**, `settings-unit` 186 → **189**, `console-debug-unit` 69 → **72**; **57 suites / 3881 assertions green**
+
 **Older versions (the v0.4 line and earlier) are in [CHANGELOG.md](CHANGELOG.md)** — the full history, including every release's defect list and test counts.

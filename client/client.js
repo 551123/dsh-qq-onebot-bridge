@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
      * 浏览器只在**页面加载时**取一次 bundle，没法热替换，所以只能刷新一次页面。
      * 与其让用户对着没变化的界面猜，不如自己认出来并给一个「刷新页面」按钮（见下面的 qqai-stale 横幅）。
      */
-    const CLIENT_VERSION = '0.6.9'
+    const CLIENT_VERSION = '0.7.0'
 
     const CSS = `
 .qqai-wrap{display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--dsw-alias-label-primary,#111)}
@@ -42,6 +42,8 @@ window.__ModuleLoader__.load({
 /* 标题右侧的版本号：小一号、次要色——它是"宿主加载的那份代码"的版本，用来判断要不要重载。 */
 .qqai-ver{font-size:11px;font-weight:400;color:var(--dsw-alias-label-secondary,#6b7280)}
 /* 面板搜索（v0.6.9）：10 组 78 键，靠滚太慢。纯前端过滤，靠右对齐挨着「刷新」。 */
+/* 「实验性」组的运行时状态行（v0.7.0）：出口挂载 / provider / 最近一次注入。 */
+.qqai-status{margin:8px 12px 0;padding:6px 8px;border-radius:6px;background:var(--dsw-alias-bg-layer-2,#f6f7f9);font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#6b7280);word-break:break-all}
 .qqai-search{margin-left:auto;width:170px;height:26px;box-sizing:border-box;padding:0 8px;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:inherit;font-size:12px}
 .qqai-search:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary,#2563eb));outline-offset:1px}
 .qqai-meta{color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px;line-height:1.6}
@@ -777,8 +779,12 @@ window.__ModuleLoader__.load({
 
     function Group({ group, busy, onSet, bridge, expandAdvanced = false }) {
       const note = group.note ? h('div', { className: 'qqai-note' }, richText(group.note)) : null
+      // ★ v0.7.0：组级**运行时状态**（目前只有「实验性」组有：出口挂载 / provider / 最近一次注入）。
+      const status = Array.isArray(group.status) && group.status.length > 0
+        ? h('div', { className: 'qqai-status' }, group.status.map((line, index) => h('div', { key: `st-${index}` }, line)))
+        : null
       // 五种行混排：布尔 / 数值 / 「开关 + 数值」合并行 / 时段列表 / 号码列表，按 `row.type` 分派。
-      const body = h('div', null, note, group.rows.map((row) => (
+      const body = h('div', null, note, status, group.rows.map((row) => (
         row.type === 'switchNumber'
           ? h(SwitchNumberRow, { key: row.key, row, busy, onSet })
           : row.type === 'times'

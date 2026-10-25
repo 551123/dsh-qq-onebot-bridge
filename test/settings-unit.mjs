@@ -15,7 +15,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, PANEL_ROW_BY_KEY, QUIET_MAX_RANGES, normalizeNumberList, normalizeQuietRanges, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
+  PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, PANEL_ROW_BY_KEY, QUIET_MAX_RANGES, extensionStatusLines, normalizeNumberList, normalizeQuietRanges, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
   panelSnapshot, readPatchValue, upsertPatchValue,
 } from '../lib/panel.js'
 import { detectNapcatBat, planNapcatAction } from '../lib/napcat-launch.js'
@@ -132,13 +132,13 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 78 = 64 开关 + 11 数值 + 1 时段 + 2 白名单）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 80 = 65 开关 + 11 数值 + 1 时段 + 3 名单）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 78
-  && boolRows.length === 64 && numRows.length === 11
+  && allRows.length === 80
+  && boolRows.length === 65 && numRows.length === 11
   && allRows.filter((entry) => entry.type === 'times').length === 1
-  && allRows.filter((entry) => entry.type === 'list').length === 2,
+  && allRows.filter((entry) => entry.type === 'list').length === 3,
   `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length} / 共 ${allRows.length}`)
 check('生图/语音这些"要装东西"的功能，说明里点明了需要什么',
   ['imageGenEnabled', 'ttsEnabled'].every((key) => {
@@ -340,6 +340,14 @@ check('「相关链接」里有更新日志与调试台，且链接由真实素�
   && consoleLink?.href === 'http://127.0.0.1:8801/'
   && links.some((link) => link.id === 'readme-debug'),
   links.map((link) => `${link.id}=${link.href}`).join(' | '))
+/**
+ * 相关链接**不**放"问题反馈"（v0.7.0 一度加过，用户当场要求移除）：
+ * 面板里只留账号 / 更新日志 / 调试文档 / 调试台四条，别再加第五条。
+ */
+check('★相关链接里没有"问题反馈"（保持四条：账号 / 更新日志 / 调试文档 / 调试台）',
+  !links.some((link) => link.id === 'feedback')
+  && links.map((link) => link.id).join(',') === 'account,changelog,readme-debug,console',
+  links.map((link) => link.id).join(','))
 check('调试台链接里不含 token（本机密钥不进面板）',
   links.every((link) => !/token=/i.test(link.href)) && consoleLink.href.startsWith('http://127.0.0.1:'))
 const bareLinks = panelFooterLinks({ version: '1.0.0', repoUrl: '', consolePort: 8799 })
@@ -779,6 +787,82 @@ check('★「AI账号与白名单」是**第一组**（在「对话基础」上�
   PANEL_GROUPS[0]?.id === 'whitelist' && PANEL_GROUPS[1]?.id === 'chat',
   brief(PANEL_GROUPS.slice(0, 3).map((group) => group.id)))
 /**
+ * ★ v0.7.0「实验性」组的运行时状态行（这是 issue #4 说的 `chips` 的替代方案）：
+ *   不发明展示契约，直接如实报告 出口挂载 / provider / 最近一次注入。
+ */
+check('★「实验性」组的状态行：挂载机制 / provider / 最近一次注入',
+  (() => {
+    const lines = extensionStatusLines({ extensionToolsEnabled: true }, {
+      mounted: { ok: true, via: 'ctx.provide', reason: '' },
+      enabled: true,
+      providers: ['my-plugin'],
+      lastInjection: { chatKey: 'g:2002', tools: ['ext_a'], sections: ['ext:my-plugin:1'], skippedTotal: 1, skipped: ['my-plugin→撞名'] },
+    })
+    return lines.length === 3
+      && /已挂载（via ctx\.provide）/.test(lines[0])
+      && /已登记 provider：my-plugin/.test(lines[1])
+      && /最近一次注入（g:2002）：1 个工具 \/ 1 段提示 · 跳过 1 项/.test(lines[2])
+  })(),
+  brief(extensionStatusLines({ extensionToolsEnabled: true }, { mounted: { ok: true, via: 'ctx.provide' }, providers: [] })))
+check('★状态行在拿不到运行时数据时只说实话，不编造挂载结果',
+  (() => {
+    const lines = extensionStatusLines({ extensionToolsEnabled: false }, null)
+    return lines.length === 1 && /未开启（默认关）/.test(lines[0])
+  })())
+/**
+ * ★ 隐私（用户 2026-10-25「这个对隐私敏感的人真的没问题吗？不会以我盗窃他信息吧」）：
+ *   用量计数**全 0 时整行不显示**（绝大多数人看不到任何"被统计"的字样）；
+ *   有数字时也必须一句话讲清：**本机内存计数、不含内容、不外传、重启清零**。
+ */
+check('★用量计数全 0 时整行不显示（不给隐私敏感的人看到"被统计"的字样）',
+  (() => {
+    const lines = extensionStatusLines({}, {
+      mounted: { ok: true, via: 'ctx.provide', reason: '' }, providers: [], lastInjection: null,
+      usage: { sendText: 0, sendImage: 0, sendFile: 0, sendVoice: 0, recall: 0, react: 0 },
+    })
+    return lines.length === 3 && !lines.some((line) => /出口被调用/.test(line))
+  })(),
+  brief(extensionStatusLines({}, {
+    mounted: { ok: true, via: 'ctx.provide' }, providers: [], lastInjection: null,
+    usage: { sendText: 0, react: 0 },
+  })))
+check('★用量计数非 0 时明确写成"本机内存计数：不含内容 / 不外传 / 重启清零"',
+  (() => {
+    const lines = extensionStatusLines({}, {
+      mounted: { ok: true, via: 'ctx.provide', reason: '' }, providers: [], lastInjection: null,
+      usage: { sendText: 2, sendImage: 0, sendFile: 0, sendVoice: 0, recall: 0, react: 1 },
+    })
+    const line = lines.find((item) => /出口被调用/.test(item)) ?? ''
+    return /本机计数/.test(line) && /不含消息内容/.test(line) && /不外传/.test(line) && /重启清零/.test(line)
+      && /sendText 2/.test(line) && /react 1/.test(line)
+  })())
+check('运行时状态行会真的渲染出来（group.status）',
+  (() => {
+    const snap = panelSnapshot({ extensionToolsEnabled: true }, {
+      defaults: {},
+      numberMeta,
+      extensions: { mounted: { ok: true, via: 'ctx.set', reason: '' }, providers: ['p1'], lastInjection: null },
+    })
+    const group = snap.groups.find((item) => item.id === 'experimental')
+    return Array.isArray(group.status) && group.status.some((line) => /ctx\.set/.test(line))
+      && group.status.some((line) => /还没有/.test(line))
+  })())
+/**
+ * ★ v0.7.0：管理员名单（`adminUsers`）进面板 —— 以前只能改 YAML，而它是 /设管理、/批量踢 的准入门。
+ *   三条钉子：① 它是「AI账号与白名单」组里的 list 行；② 标签写明"必须同时在允许的用户里"；
+ *   ③ 组提示里也补了同一句（消息先过 allowUsers，管理员不在里面命令就不会响应）。
+ */
+check('★adminUsers 面板行存在，且标签与组提示都写明它受 allowUsers 约束',
+  (() => {
+    const group = PANEL_GROUPS.find((item) => item.id === 'whitelist')
+    const row = group.rows.find((item) => item.key === 'adminUsers')
+    return row !== undefined && row.type === 'list'
+      && /管理员/.test(row.label)
+      && /必须同时出现在「允许的用户」里/.test(String(row.hint))
+      && /管理员名单里的号也必须出现在「允许的用户」里/.test(String(group.note))
+  })(),
+  brief(PANEL_GROUPS.find((item) => item.id === 'whitelist')?.rows.map((row) => `${row.key}:${row.type}`)))
+/**
  * ★ 2026-10-20 用户改名：「白名单」→「**AI账号与白名单**」，并把 `botQq` 也收进这一组
  *   （三者是同一类东西：这是哪个机器人账号、它认谁）。
  */
@@ -788,7 +872,7 @@ check('★「AI账号与白名单」只放"谁能让它开口"（不放回复样
     const chat = PANEL_GROUPS.find((item) => item.id === 'chat')
     return group !== undefined && group.title === 'AI账号与白名单'
       // 准入门（群里只理被 @ 的 / 允许私聊）和白名单是同一件事：谁能让它开口
-      && group.rows.map((row) => `${row.key}:${row.type}`).join(',') === 'botQq:number,allowAllChats:boolean,replyOnlyWhenMentioned:boolean,acceptPrivate:boolean,allowUsers:list,allowGroups:list'
+      && group.rows.map((row) => `${row.key}:${row.type}`).join(',') === 'botQq:number,allowAllChats:boolean,replyOnlyWhenMentioned:boolean,acceptPrivate:boolean,allowUsers:list,allowGroups:list,adminUsers:list'
       // 对话基础里不再留这两个开关（避免两处都能改、看着像重复）
       && !chat.rows.some((row) => row.key === 'replyOnlyWhenMentioned' || row.key === 'acceptPrivate')
       /**
@@ -824,6 +908,23 @@ await setHandler(fakeRequest('POST', { key: 'allowUsers', value: ['2000000001'] 
 check('★POST 拒绝字符串号码（会把白名单变成永远匹配不上的死配置）',
   allowBad.out.status === 400 && /只接受数字号码/.test(JSON.parse(allowBad.out.body).reason),
   brief(JSON.parse(allowBad.out.body).reason))
+/**
+ * ★ v0.7.0：新进面板的 `adminUsers` 也必须能**真的写进配置**（和 allowGroups 同一条路）。
+ *   它同样是 `z.array(z.number())` —— 写成字符串会让 `#isAdmin()` 的 includes 永远匹配不上，
+ *   于是"填了管理员却什么命令都不响应"，而且**不报错**。
+ */
+const adminOk = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'adminUsers', value: [100000003] }, JSON_HEADERS), adminOk)
+check('★POST 管理员名单写进配置（数字、不带引号），且能读回来',
+  adminOk.out.status === 200
+  && /^\s*adminUsers: \[100000003\]$/m.test(readFileSync(patchPath, 'utf8'))
+  && JSON.stringify(readPatchValue(readFileSync(patchPath, 'utf8'), 'adminUsers')) === JSON.stringify([100000003]),
+  brief({ status: adminOk.out.status, line: readFileSync(patchPath, 'utf8').split(/\r?\n/).find((line) => line.includes('adminUsers')) }))
+const adminBad = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'adminUsers', value: ['100000003'] }, JSON_HEADERS), adminBad)
+check('★POST 也拒绝把管理员写成字符串（否则永远匹配不上）',
+  adminBad.out.status === 400 && /只接受数字号码/.test(JSON.parse(adminBad.out.body).reason),
+  brief(JSON.parse(adminBad.out.body).reason))
 const wrongMethod = makeResponse()
 await getHandler(fakeRequest('POST'), wrongMethod)
 check('方法不对给 405', wrongMethod.out.status === 405, String(wrongMethod.out.status))

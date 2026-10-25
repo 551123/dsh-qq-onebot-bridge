@@ -44,8 +44,13 @@ export function runDiagnose({ config, snapshot, runtime, events = [], now = Date
     onebot?.listening ? `PID ${onebot.pid} ${onebot.process}` : '无人监听',
     '机器人宿主没起来时 6700 不会监听；若被别的进程占用，用「释放」按钮结束它'))
   const napcatPort = row('napcat')
+  /**
+   * 这里以前和 6700 一样写「无人监听」，于是 issue #3 的用户看到「6700 明明通了、6099 却无人监听」，
+   * 以为 QQ 桥坏了。6099 是 **WebUI**：只有扫码/登录的时候才需要它，收消息走反向 WS（NapCat 主动连出）。
+   * ⇒ 文案改成"未监听（仅扫码/登录时需要，不影响收消息）"，一眼能看出这不是故障。
+   */
   checks.push(item('port-napcat', `NapCat WebUI ${napcatPort?.port ?? '?'}`, napcatPort?.listening,
-    napcatPort?.listening ? `PID ${napcatPort.pid} ${napcatPort.process}` : '无人监听',
+    napcatPort?.listening ? `PID ${napcatPort.pid} ${napcatPort.process}` : '未监听（仅扫码/登录时需要，不影响收消息）',
     '需要扫码登录时点「启动 NapCat」；仅聊天不需要它也能收消息（反向 WS 由 NapCat 主动连出）', 'warn'))
   const tts = row('tts')
   const ttsWanted = runtime?.features?.ttsEnabled === true

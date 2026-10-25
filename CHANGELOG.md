@@ -1,4 +1,111 @@
 # 更新日志 / Changelog
+## v0.7 系列 —— 实验性与扩展 / Experimental & Extensions
+### v0.7.0（2026-10-25）— 实验性与扩展 / Experimental & Extensions
+
+把 0.6.x 里**评估过但没做**的扩展点，以**实验性、默认关**的方式放回来，并给它们一个集中的「实验性」组。
+第三方插件从此可以"发消息、看收发、加工具"，但**没有**绕过护栏的第二条路。
+
+#### 一、实例出口 `ctx.qqBridge`
+
+```js
+const r = await ctx.qqBridge.sendText('g:123456', '你好')   // { ok, reason, chatKey }
+await ctx.qqBridge.sendImage('u:1001', '/abs/pic.png', '配文')
+await ctx.qqBridge.sendFile('u:1001', '/abs/doc.pdf', '说明.pdf')
+await ctx.qqBridge.sendVoice('u:1001', '要读的文本')
+await ctx.qqBridge.react('u:1001', '<messageId>', 128077)   // 贴表情（ActionGate + 出站配额）
+await ctx.qqBridge.recall('u:1001', 1)                       // 撤回自己最近发的消息（受撤回窗口限制）
+ctx.qqBridge.workspaceRoot                                   // 工作目录（只读，文件校验以它为根）
+ctx.qqBridge.sessions()   // [{ chatKey, sessionId, turnActive }]（只读副本）
+ctx.qqBridge.agents()     // [{ sessionId }]（只读副本）
+ctx.qqBridge.config()     // 配置快照：token / apiKey / secret / password / cookie 这类键已抹掉
+ctx.qqBridge.version      // 出口契约版本（当前 1）
+```
+
+- **发送复用原有护栏**：文本走 `#replyTo`（出站限流 / 注入抑制 / 分段 / 合并转发），图片走路径解析 + 压缩，
+  文件走 ActionGate 配额，语音过 TTS 可用性检查。被拦时回 `{ ok: false, reason }`。
+- **目标也要在白名单里**：出口自己按入站口径再查一遍（私聊目标必须在 `allowUsers`、群目标必须在 `allowGroups`；
+  「回应所有人」打开时不查）。否则第三方能**绕过白名单主动**打扰名单外的人/群，而风控封的是机器人自己的号。
+- **每次出口发送都进 trace**（`module: extension`）：成功 / 被目标名单拦下 / 发送失败都留一条。
+- 挂载尽力而为：`ctx.set` → `ctx.provide` + 赋值 → 模块级注册表；本机实测走 **`ctx.provide`**
+  （trace 里能看到「扩展出口已挂载：ctx.qqBridge（via ctx.provide）」），挂不上只记一条 info。
+- **补完 issue #4 点的三处出口**：`react`（贴表情，走 `qq_react` 同一条 `set_msg_emoji_like` + ActionGate）、
+  `recall`（撤回机器人自己最近发的消息，复用 `#recallRecent`：只动自己发的、受撤回窗口限制）、
+  `workspaceRoot`（只读的工作目录）。`react` / `recall` 同样过**目标白名单**并写 trace；
+  没有可撤回 / 可回应的消息时**如实报错**（不装成功）。
+
+#### 二、只读事件 `qqbridge:inbound` / `qqbridge:outbound`
+
+```js
+ctx.on('qqbridge:inbound',  (e) => {})   // { chatKey, messageType, userId, groupId, messageId, text, atMe, injected, replayed, at }
+ctx.on('qqbridge:outbound', (e) => {})   // { chatKey, kind: 'text'|'image'|'file'|'voice', text, file, bytes, mode, traceId, at }
+```
+
+- 入站事件**刻意放在白名单 / 静默 / 去重之后、命令与模型之前**：监听不可能绕过门禁，文本已是归一化后的那份。
+- 出站事件**只在真的发出去之后**派发（被限流/注入抑制的不发），带 `kind` 区分文本/图片/文件/语音。
+- **只能观察，不能改写、不能拦截**；监听器同步抛错或异步 reject 只记一条 debug，不影响消息处理。
+
+#### 三、实验性：工具 provider 链（`extensionToolsEnabled`，默认关）
+
+```js
+const off = ctx.qqBridge.registerToolProvider(({ agentCtx, route, key, config }) => ({
+  tools: [ /* defineTool(...) 的返回值 */ ],
+  sections: [ /* { name?, order?, text } */ ],
+}), { name: 'my-plugin' })
+```
+
+- **默认关**：不开 `extensionToolsEnabled` 时 provider 登记了也完全不生效（提示段是**每条消息**都进模型的成本）。
+- **只能新增，不能覆盖内置**：与 10 个内置工具（`qq_*`）重名的一律跳过，原因写进 trace。
+- **provider 抛错只跳过它自己**：一个坏的第三方不能拖垮这条消息；返回形状不对、提示段没 text 同理。
+- **有条数上限**（每 provider 8 工具 / 4 段，总计 24 / 12），防"塞爆提示词"。
+- **"超时"保护**（issue #4 提的那条，按 JS 能做的做）：① provider **返回 Promise 一律跳过** ——
+  会话 setup 是同步链路，await 会把这条消息拖住；② 整轮调用有**时间预算**（默认 200ms）：
+  第一个 provider 总要试一次，之后超预算就跳过剩下的，并在 trace 里写明"已用 X ms / 上限 Y ms"。
+  （JS 无法抢占一个同步函数，所以这里不做假的"超时中断"。）
+- **无静默分支**：注入什么、跳过什么、为什么跳过，全部写进 trace（`module: extension`，含 provider 名与工具名）。
+- 面板新增 **「实验性（EXPERIMENTAL）」组**（默认折叠），这行说明里写清了"外部扩展不在本项目维护范围内"。
+- **运行时状态行（替代 issue #4 说的 `chips`）**：「实验性」组下面直接显示**运行时事实**——
+  「出口：已挂载（via ctx.provide）」「扩展工具：已开启 · 已登记 provider：my-plugin」
+  「最近一次注入（g:2002）：1 个工具 / 1 段提示 · 跳过 1 项：…」。
+  为什么不做 `chips`：那要 provider 额外声明"工具在面板里的展示名与用途"，等于再发明一套展示契约，
+  而工具自己的 `description` 已经写了用途；用户真正想知道的是"挂上了没有、谁在塞东西、最近塞了什么"。
+  数据来自运行中的桥（`bridge.extensionReport()`）；拿不到（老宿主 / 面板被单独调用）就只显示开关状态，**不编造**。
+
+> 关于「相关链接」：v0.7.0 开发中一度加过一条「问题反馈（GitHub Issues）」，按要求**已移除** ——
+> 面板只保留 账号 / 更新日志 / 调试文档 / 调试台 四条（`settings-unit` 钉住了"不许出现第五条的反馈链接"）。
+
+#### 四、面板补齐 + 一句话就能看懂的提示
+
+- **管理员名单（`adminUsers`）进面板**：以前只能改 YAML，而它正是 `/设管理`、`/批量踢`、`/退群` 的准入门。
+  行说明和组提示都写明一条**容易踩的坑**：管理员必须**同时**出现在「允许的用户」里 ——
+  消息先过白名单，名单外的管理员不会被"特殊放行"，命令就是不响应。空列表 = 没有管理员（安全默认）。
+- **控制台体检不再吓人**：NapCat WebUI（6099）以前和 6700 一样显示「无人监听」，issue #3 的用户因此以为 QQ 桥坏了。
+  现在写「未监听（仅扫码/登录时需要，不影响收消息）」—— 6099 只在扫码/登录时需要，收消息走反向 WS。
+- **出口用量计数**（回答"到底有没有人在用这个 API"，但**不做成"统计"的观感**）：
+  面板「实验性」组**只在真的被调用过（总数 > 0）时**才显示一行，文案写明
+  「本机计数：只在内存里累加，**不含消息内容、不外传、重启清零**」。全 0 时**整行不显示** ——
+  绝大多数人根本没用过出口，摆一串 0 只会让人怀疑"你是不是在统计我 / 往哪儿上报"。
+  计数只在桥进程内存里（不落盘、不进 `qq-runtime.json`、不发任何请求），面板也只由本机宿主提供。
+- **README 新增「兼容承诺」**：只增不改、删改要升 `version` 并保留至少一个小版本、
+  事件永远只读、内部实现（私有方法/文件格式/trace 字段）不在承诺范围内。
+- **README 顶部瘦身**：删掉「功能总览」里那两条 **v0.5 线 / v0.4 线**（连带顶部那条 v0.4 主题引用）——
+  它们是"只看最近两个大版本"的旧框，越往后越误导；**能力清单统一看本文件**（每个版本一节，逐条写清）。
+  文件头只留标题 + 一句简介，直接进「架构」。
+
+#### 边界（明确不做，写在这里免得以后反复讨论）
+
+- **出站内容改写 / 可拦截事件**：等于给第三方开"替机器人说话""静默吞消息"的旁路，风控打的是机器人账号。
+- **多账号 / 多实例**：与"一个宿主只托管一个 QQ 桥"的既有约束冲突。
+- **向量记忆 / 嵌入检索**：与"轻量、零依赖"冲突。
+
+#### 单测
+
+新增 `test/extension-unit.mjs`（**43 条**）：出口形状与身份、入站事件（含"白名单外不发"）、出站事件与 `ctx.emit` 双通道、
+非法 chatKey 不抛、**目标白名单**三种情形、复用出站限流、**react / recall 与 workspaceRoot**、监听器抛错隔离、
+快照是副本、密钥被抹掉、provider 链的收下/撞名跳过/抛错跳过/**异步拒绝**/**时间预算**/条数上限/注册与注销/`config` 脱敏、
+**出口用量计数**、三种挂载机制 + 兜底注册表，以及"内置工具名清单与源码 `defineTool` 一一对应"（防漏改）。
+`settings-unit` 267 → **276** 条（面板 78 → **80 个键** = 65 开关 + 11 数值 + 1 时段 + 3 名单，依赖分布断言同步）；
+全量 **61 套 / 4075 断言全绿**。
+
 ## v0.6 系列 —— 轻量化设计 / Lightweight
 ### v0.6.9（2026-10-25）— 查得到 · 找得到 · 引得到 / Ask why, find it, quote it
 
