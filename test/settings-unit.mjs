@@ -132,11 +132,11 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 77 = 63 开关 + 11 数值 + 1 时段 + 2 白名单）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 78 = 64 开关 + 11 数值 + 1 时段 + 2 白名单）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 77
-  && boolRows.length === 63 && numRows.length === 11
+  && allRows.length === 78
+  && boolRows.length === 64 && numRows.length === 11
   && allRows.filter((entry) => entry.type === 'times').length === 1
   && allRows.filter((entry) => entry.type === 'list').length === 2,
   `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length} / 共 ${allRows.length}`)
@@ -484,6 +484,18 @@ check('★面板载荷带 pluginVersion（= package.json 的版本，用来判�
   typeof readBody.pluginVersion === 'string' && readBody.pluginVersion === pkgVersion,
   brief({ pluginVersion: readBody.pluginVersion }))
 /**
+ * ★ v0.6.9：这个值必须**每次现读**。宿主热重载复用 Node 的 ESM 模块缓存，把版本缓存在模块加载时
+ * 会让面板永远报宿主启动那一刻的版本（真机实测 0.6.9 报成 0.6.8，前端还会误报「前端落后」）。
+ */
+check('★pluginVersion 是每次现读的（不是模块加载时的缓存常量）',
+  (() => {
+    const source = readFileSync(new URL('../lib/settings-routes.js', import.meta.url), 'utf8')
+    return /function readPluginVersion\(\)/.test(source)
+      && /pluginVersion: readPluginVersion\(\)/.test(source)
+      && !/const PLUGIN_VERSION = \(/.test(source)
+  })(),
+  'settings-routes.js 里版本读取方式')
+/**
  * ★ 前端 bundle 里那份 `CLIENT_VERSION` 必须与 package.json 一致：
  * 它是"页面攥着的前端是哪一版"的判据——不同步的话，横幅要么永远误报、要么永远不报。
  */
@@ -770,14 +782,21 @@ check('★「AI账号与白名单」是**第一组**（在「对话基础」上�
  * ★ 2026-10-20 用户改名：「白名单」→「**AI账号与白名单**」，并把 `botQq` 也收进这一组
  *   （三者是同一类东西：这是哪个机器人账号、它认谁）。
  */
-check('★「AI账号与白名单」= AI 账号 + 不设白名单 + 两个准入门 + 两个白名单',
+check('★「AI账号与白名单」只放"谁能让它开口"（不放回复样式）',
   (() => {
     const group = PANEL_GROUPS.find((item) => item.id === 'whitelist')
+    const chat = PANEL_GROUPS.find((item) => item.id === 'chat')
     return group !== undefined && group.title === 'AI账号与白名单'
       // 准入门（群里只理被 @ 的 / 允许私聊）和白名单是同一件事：谁能让它开口
       && group.rows.map((row) => `${row.key}:${row.type}`).join(',') === 'botQq:number,allowAllChats:boolean,replyOnlyWhenMentioned:boolean,acceptPrivate:boolean,allowUsers:list,allowGroups:list'
       // 对话基础里不再留这两个开关（避免两处都能改、看着像重复）
-      && !PANEL_GROUPS.find((item) => item.id === 'chat').rows.some((row) => row.key === 'replyOnlyWhenMentioned' || row.key === 'acceptPrivate')
+      && !chat.rows.some((row) => row.key === 'replyOnlyWhenMentioned' || row.key === 'acceptPrivate')
+      /**
+       * ★ v0.6.9（用户："回复带引用这玩意不应该放入别的列表里吗"）：
+       * 「回复带引用」是**回复的样式**，不是"谁能让它开口" ⇒ 归「对话基础」，不塞进白名单组。
+       */
+      && chat.rows.some((row) => row.key === 'quoteReplyEnabled')
+      && !group.rows.some((row) => row.key === 'quoteReplyEnabled')
   })(),
   brief(PANEL_GROUPS.find((item) => item.id === 'whitelist')?.rows.map((row) => `${row.key}:${row.type}`)))
 for (const [label, value, expect] of [
@@ -2108,6 +2127,32 @@ const clientVersion = (() => {
   check('★浅渲染：标题旁显示宿主版本号（v9.9.9），「刷新」按钮在',
     readyText.includes('v9.9.9') && ready.buttons.some((btn) => btn.text === '刷新'),
     `buttons=${ready.buttons.map((b) => b.text).join('')}`)
+  /**
+   * ★ v0.6.9 面板搜索：10 组 78 键靠滚太慢 —— 顶部一个搜索框，纯前端过滤。
+   *   这里验三件事：① 框在；② 搜到就只剩命中的组/行，并显示"匹配 N 组 / M 行"；
+   *   ③ 一个都搜不到时给出"换个词"的提示（而不是一片空白）。
+   */
+  check('★浅渲染：顶部有搜索框（纯前端过滤，不发请求）',
+    ready.inputs.some((item) => item.label === '搜索面板里的开关')
+    && clientText.includes('function filterGroups(groups, query)')
+    && clientText.includes("className: 'qqai-search'")
+    && clientText.includes('.qqai-search{'),
+    `inputs=${ready.inputs.map((i) => i.label).join(' | ')}`)
+  check('★搜索命中：只留匹配的组与行，并显示「匹配 N 组 / M 行」',
+    (() => {
+      // 夹具里的行动态：ttsEnabled / chatTurnLimit / quietHours / allowUsers —— 用「静默」命中其中之一。
+      const searching = shallowText(render, [{ ...fixture, filter: '静默' }])
+      return searching.text.includes('匹配')
+        && searching.text.includes('静默时段')
+        && !searching.text.includes('允许的用户（QQ 号）')
+    })(),
+    '搜索「静默」')
+  check('★搜索无命中：给"换个词/清空"的提示，而不是空白',
+    (() => {
+      const none = shallowText(render, [{ ...fixture, filter: '绝对不存在的开关名' }])
+      return none.text.includes('没有匹配') && none.text.includes('清空搜索框')
+    })(),
+    '搜索一个不存在的词')
   /**
    * ★ v0.6.8：桥的状态行也要渲染出来（"登录了却没有反馈"就靠它）。
    * 夹具给一份"已连接 + 被拦"的桥状态，必须看到连接与拦截原因。

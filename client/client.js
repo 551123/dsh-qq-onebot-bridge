@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
      * 浏览器只在**页面加载时**取一次 bundle，没法热替换，所以只能刷新一次页面。
      * 与其让用户对着没变化的界面猜，不如自己认出来并给一个「刷新页面」按钮（见下面的 qqai-stale 横幅）。
      */
-    const CLIENT_VERSION = '0.6.8'
+    const CLIENT_VERSION = '0.6.9'
 
     const CSS = `
 .qqai-wrap{display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--dsw-alias-label-primary,#111)}
@@ -41,6 +41,9 @@ window.__ModuleLoader__.load({
 .qqai-title{font-size:15px;font-weight:600}
 /* 标题右侧的版本号：小一号、次要色——它是"宿主加载的那份代码"的版本，用来判断要不要重载。 */
 .qqai-ver{font-size:11px;font-weight:400;color:var(--dsw-alias-label-secondary,#6b7280)}
+/* 面板搜索（v0.6.9）：10 组 78 键，靠滚太慢。纯前端过滤，靠右对齐挨着「刷新」。 */
+.qqai-search{margin-left:auto;width:170px;height:26px;box-sizing:border-box;padding:0 8px;border:1px solid var(--dsw-alias-border-l3,#0000001f);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111);font:inherit;font-size:12px}
+.qqai-search:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary,#2563eb));outline-offset:1px}
 .qqai-meta{color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px;line-height:1.6}
 .qqai-group{border:1px solid var(--dsw-alias-border-l1,#e5e7eb);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);overflow:hidden}
 .qqai-group>summary{cursor:pointer;padding:10px 12px;font-weight:600;list-style:none;background:var(--dsw-alias-bg-layer-2,#f6f7f9)}
@@ -741,7 +744,38 @@ window.__ModuleLoader__.load({
             : null))
     }
 
-    function Group({ group, busy, onSet, bridge }) {
+    /**
+     * 面板搜索（v0.6.9）：10 组 78 个键，找某个开关只能靠滚 —— 顶部给一个输入框，
+     * **纯前端过滤**（不发请求、不改配置），按中文标签 / 配置键名 / 说明文字匹配。
+     *
+     * 规则：
+     *   - 组名命中 ⇒ 整组都留下（想找「白名单」就整组看）；
+     *   - 否则只留命中的行；一行都不剩的组整组隐藏；
+     *   - 搜索时「进阶」组自动展开（否则结果全折叠着，看着像没搜到）。
+     * 返回 `{ groups, rows }`，`rows` 用于顶部显示"匹配 N 组 / M 行"。
+     */
+    function filterGroups(groups, query) {
+      const list = Array.isArray(groups) ? groups : []
+      const needle = String(query ?? '').trim().toLowerCase()
+      if (needle === '') return { groups: list, rows: 0, filtering: false }
+      const hit = (text) => String(text ?? '').toLowerCase().includes(needle)
+      const kept = []
+      let rows = 0
+      for (const group of list) {
+        const groupRows = Array.isArray(group.rows) ? group.rows : []
+        const titleHit = hit(group.title)
+        const matched = titleHit
+          ? groupRows
+          : groupRows.filter((row) => hit(row.label) || hit(row.key) || hit(row.hint)
+            || (row.number && (hit(row.number.label) || hit(row.number.key))))
+        if (matched.length === 0) continue
+        rows += matched.length
+        kept.push({ ...group, rows: matched })
+      }
+      return { groups: kept, rows, filtering: true }
+    }
+
+    function Group({ group, busy, onSet, bridge, expandAdvanced = false }) {
       const note = group.note ? h('div', { className: 'qqai-note' }, richText(group.note)) : null
       // 五种行混排：布尔 / 数值 / 「开关 + 数值」合并行 / 时段列表 / 号码列表，按 `row.type` 分派。
       const body = h('div', null, note, group.rows.map((row) => (
@@ -760,7 +794,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'qqai-group-head', style: { padding: '10px 12px', fontWeight: 600, background: 'var(--dsw-alias-bg-layer-2,#f6f7f9)' } }, group.title),
           body)
       }
-      return h('details', { className: 'qqai-group' },
+      // 搜索时强制展开：否则命中的开关藏在折叠里，看着像"没搜到"。
+      return h('details', { className: 'qqai-group', open: expandAdvanced === true ? true : undefined },
         h('summary', null, `${group.title}（进阶）`),
         body)
     }
@@ -811,7 +846,7 @@ window.__ModuleLoader__.load({
     let coolTimer = null
 
     function QqAiPanel() {
-      const [state, setState] = useState({ status: 'loading', data: null, error: '', flash: '', busyKey: '', busyAction: '', qrStamp: Date.now(), watchingQr: false, refreshing: false, cooling: false })
+      const [state, setState] = useState({ status: 'loading', data: null, error: '', flash: '', busyKey: '', busyAction: '', qrStamp: Date.now(), watchingQr: false, refreshing: false, cooling: false, filter: '' })
 
       /**
        * 拉一次面板。
@@ -1000,6 +1035,8 @@ window.__ModuleLoader__.load({
        */
       const hostVersion = typeof data.pluginVersion === 'string' ? data.pluginVersion : ''
       const staleClient = hostVersion !== '' && hostVersion !== '?' && hostVersion !== CLIENT_VERSION
+      // ★ v0.6.9 面板搜索：纯前端过滤（不发请求、不改配置），见 filterGroups()。
+      const shown = filterGroups(data.groups, state.filter)
       return h('div', { className: 'qqai-wrap' },
         h('style', null, CSS),
         staleClient
@@ -1014,6 +1051,16 @@ window.__ModuleLoader__.load({
             typeof data.pluginVersion === 'string' && data.pluginVersion !== ''
               ? h('span', { className: 'qqai-ver', title: '宿主当前加载的插件版本；点「刷新」看它有没有变' }, ` v${data.pluginVersion}`)
               : null),
+          h('input', {
+            className: 'qqai-search', type: 'search', value: state.filter ?? '',
+            placeholder: '搜索开关 / 配置键名…', 'aria-label': '搜索面板里的开关',
+            title: '按中文标签或配置键名过滤（纯前端，不改任何配置）；清空恢复全部',
+            onChange: (event) => {
+              const value = String(event.target.value ?? '')
+              // 函数式更新：整对象替换会把 data 一起清掉（真机白屏事故，见 PanelBoundary 的注释）。
+              setState((prev) => ({ ...prev, filter: value }))
+            },
+          }),
           h('button', {
             className: 'qqai-refresh',
             onClick: () => void load({ announce: true }),
@@ -1045,7 +1092,21 @@ window.__ModuleLoader__.load({
         state.flash ? h('div', { className: 'qqai-flash' }, state.flash) : null,
         state.error ? h('div', { className: 'qqai-err' }, state.error) : null,
         (Array.isArray(data.warnings) ? data.warnings : []).map((text, index) => h('div', { key: `warn-${index}`, className: 'qqai-warn' }, `⚠️ ${text}`)),
-        data.groups.map((group) => h(Group, { key: group.id, group, busy: state.busyKey !== '' || state.cooling === true, onSet: toggle, bridge: data.bridge })),
+        // 搜索状态那一行：只在真在搜的时候出现（平时不占地方）。
+        shown.filtering
+          ? h('div', { className: 'qqai-meta' },
+            shown.groups.length === 0
+              ? `没有匹配「${state.filter}」的开关 —— 换个词，或清空搜索框`
+              : `匹配 ${shown.groups.length} 组 / ${shown.rows} 行（搜索是纯前端过滤，不影响配置）`)
+          : null,
+        shown.groups.map((group) => h(Group, {
+          key: group.id,
+          group,
+          busy: state.busyKey !== '' || state.cooling === true,
+          onSet: toggle,
+          bridge: data.bridge,
+          expandAdvanced: shown.filtering === true,
+        })),
       )
     }
 
