@@ -290,6 +290,29 @@ check('★一个 provider 贡献 12 个工具（真实使用者的规模）不�
     builtinNames: BUILTIN_TOOL_NAMES,
   }).tools.length === 12)
 /**
+ * ★★ v0.7.3（issue #4 作者的真实插件里写 `context?.workspaceRoot || ''`）：
+ *   他按出口的形状假设 provider 会拿到 workspaceRoot —— 而上游一直没给，等于**静默** undefined。
+ *   现在 context 补齐 `workspaceRoot` + `extensionVersion`，并由这条断言钉住。
+ */
+const providerContext = (() => {
+  let seen = null
+  const collected = collectProviderAdditions({
+    providers: [{
+      name: 'ctxprobe',
+      fn: (context) => { seen = context; return { tools: [fakeTool('ext_probe')], sections: [] } },
+    }],
+    builtinNames: BUILTIN_TOOL_NAMES,
+    context: { key: 'g:2002', workspaceRoot: dir, extensionVersion: 1, config: { accessToken: 'x' } },
+  })
+  return { seen, collected }
+})()
+check('★★provider 的 context 带 workspaceRoot / extensionVersion / key（不再靠猜）',
+  providerContext.seen?.workspaceRoot === dir
+  && providerContext.seen?.extensionVersion === 1
+  && providerContext.seen?.key === 'g:2002'
+  && providerContext.collected.tools.length === 1,
+  brief(providerContext.seen && Object.keys(providerContext.seen)))
+/**
  * ★★ v0.7.1 复核抓到的自家漏洞：`slice()` 截断本来是**静默**的（超了上限直接丢，什么都不记），
  *   这违反了本项目"无静默分支"的根本规矩。现在超上限本身会记一条 skipped 并进 trace。
  */

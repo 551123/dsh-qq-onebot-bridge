@@ -132,11 +132,11 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 80 = 65 开关 + 11 数值 + 1 时段 + 3 名单）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 82 = 66 开关 + 12 数值 + 1 时段 + 3 名单）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 80
-  && boolRows.length === 65 && numRows.length === 11
+  && allRows.length === 82
+  && boolRows.length === 66 && numRows.length === 12
   && allRows.filter((entry) => entry.type === 'times').length === 1
   && allRows.filter((entry) => entry.type === 'list').length === 3,
   `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length} / 共 ${allRows.length}`)
@@ -604,6 +604,23 @@ check('★数值写成功后回的面板里，该行带 schema 的范围、文�
       && row.min === 1 && row.max === 10 && row.unit === '条/分钟' && row.pending === true
   })(),
   brief(numOkBody.panel?.groups.flatMap((g) => g.rows).find((r) => r.type === 'switchNumber')?.number))
+/**
+ * ★ v0.7.4：污点窗口时长（1–1440）走**同一条数值写入路径**。
+ *   它是「开关 + 数值」合成行里的那个数字键，写盘时必须按数字写、越界必须拒 ——
+ *   否则用户会改成一个不生效的值（0 分钟 = 窗口立刻过期，看着像"没生效"）。
+ */
+const taintNumOk = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'taintWindowMinutes', value: 45 }, JSON_HEADERS), taintNumOk)
+check('★POST 接受污点窗口时长（45，落在 1–1440）并写进配置',
+  taintNumOk.out.status === 200 && /^\s*taintWindowMinutes: 45$/m.test(readFileSync(patchPath, 'utf8')),
+  brief({ status: taintNumOk.out.status }))
+for (const [label, value] of [['0（下限外）', 0], ['1441（上限外）', 1441], ['小数（2.5）', 2.5]]) {
+  const res = makeResponse()
+  await setHandler(fakeRequest('POST', { key: 'taintWindowMinutes', value }, JSON_HEADERS), res)
+  check(`★POST 拒绝污点窗口时长${label}，且不改文件`,
+    res.out.status === 400 && /^\s*taintWindowMinutes: 45$/m.test(readFileSync(patchPath, 'utf8')),
+    brief({ status: res.out.status, reason: JSON.parse(res.out.body).reason }))
+}
 for (const [label, value, expect] of [
   ['超上限（11）', 11, '范围'],
   ['低于下限（0）', 0, '范围'],
