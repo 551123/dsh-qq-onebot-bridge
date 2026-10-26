@@ -8,5 +8,6 @@
     ".": "./index.js",
     "./body.mjs": "./body.mjs"
   },
-  "description": "页面 3 + 笔记 3 个 QQ 桥工具（Tier A 第二包，从补丁 44 迁出）"
+  "description": "页面 3 + 笔记 3 个 QQ 桥工具（Tier A 第二包，从补丁 44 迁出）",
+  "license": "MIT"
 }
