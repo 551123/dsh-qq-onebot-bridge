@@ -128,6 +128,64 @@ check('收到群消息事件且识别 @', events.message.length === 1 && events.
 check('收到撤回 notice 事件', events.notice.length === 1 && events.notice[0].messageId === 31)
 check('收到入群请求事件', events.request.length === 1 && events.request[0].flag === 'req-1' && events.request[0].comment === '答案：19')
 
+// ---- get_forward_msg：专属超时 + 超时重试一次 ----
+// 背景：合并转发卡片是最重的读（实测 100 条约 4000 字，一次真实调用耗时 10012ms），
+// 原先套用全局 10s 超时会被拒，整张卡片的正文丢失。这里用极短超时把该路径跑实。
+{
+  const fwdServer = new OneBotServer({ host: '127.0.0.1', port: port + 1, accessToken: '', botQq: 12345 }, logger)
+  await fwdServer.start()
+  const fwdClient = new WebSocket(`ws://127.0.0.1:${port + 1}`)
+  await once(fwdClient, 'open')
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  const fwdSocket = fwdServer.currentSocket()
+  const seen = []
+  /** 每次调用都用极短超时，让重试路径在毫秒级跑完。 */
+  const SHORT = { timeoutMs: 80 }
+
+  /** 换一套应答策略：本用例自己控制每一帧怎么回。 */
+  const respond = (fn) => {
+    fwdClient.removeAllListeners('message')
+    fwdClient.on('message', (raw) => {
+      const frame = JSON.parse(String(raw))
+      seen.push(frame)
+      fn(frame, seen.length)
+    })
+  }
+
+  // 1) 第一次不回（模拟卡顿）→ 触发超时 → 自动重试 → 第二次成功
+  respond((frame, n) => {
+    if (n >= 2) fwdClient.send(JSON.stringify({ status: 'ok', retcode: 0, echo: frame.echo, data: { messages: [{ type: 'node', data: { name: '小明', content: [{ type: 'text', data: { text: '今晚开黑吗' } }] } }] } }))
+  })
+  const before1 = seen.length
+  const got = await fwdServer.getForwardMsg(fwdSocket, 'fwd-retry-1', SHORT)
+  const calls1 = seen.slice(before1)
+  check('getForwardMsg 超时后重试并最终成功', got && Array.isArray(got.messages) && got.messages.length === 1, JSON.stringify(got).slice(0, 80))
+  check('getForwardMsg 重试共发出 2 次调用', calls1.length === 2, `calls=${calls1.length}`)
+  check('getForwardMsg 两次调用同一 action 且 id 一致', calls1.every((f) => f.action === 'get_forward_msg' && f.params.id === 'fwd-retry-1'), JSON.stringify(calls1.map((f) => f.params)))
+
+  // 2) 服务端明确回错（retcode 非 0）→ 不重试（重试无用，且避免无意义请求）
+  respond((frame) => fwdClient.send(JSON.stringify({ status: 'failed', retcode: 1404, echo: frame.echo, data: null })))
+  const before2 = seen.length
+  let explicitError = null
+  try { await fwdServer.getForwardMsg(fwdSocket, 'fwd-err-2', SHORT) } catch (error) { explicitError = error }
+  const calls2 = seen.slice(before2)
+  check('getForwardMsg 明确报错时抛出', explicitError !== null, String(explicitError?.message).slice(0, 60))
+  check('getForwardMsg 明确报错时不重试（只 1 次调用）', calls2.length === 1, `calls=${calls2.length}`)
+  check('getForwardMsg 明确报错不带 timedOut 标志', explicitError?.timedOut !== true)
+
+  // 3) 一直不回 → 两次都超时 → 抛出的错误带 timedOut，便于调用方区分"可重试"
+  respond(() => {})
+  const before3 = seen.length
+  let timeoutError = null
+  try { await fwdServer.getForwardMsg(fwdSocket, 'fwd-timeout-3', SHORT) } catch (error) { timeoutError = error }
+  const calls3 = seen.slice(before3)
+  check('getForwardMsg 持续超时最终抛出', timeoutError !== null, String(timeoutError?.message).slice(0, 60))
+  check('getForwardMsg 持续超时重试后共 2 次调用', calls3.length === 2, `calls=${calls3.length}`)
+  check('超时错误带 timedOut=true 与 action', timeoutError?.timedOut === true && timeoutError?.action === 'get_forward_msg', `timedOut=${timeoutError?.timedOut} action=${timeoutError?.action}`)
+
+  fwdClient.close()
+  await fwdServer.stop()
+}
 // ---- v0.5.9：端口被占时必须"如实返回失败"，不许挂死、不许抛未捕获错误 ----
 // 场景：web 宿主与官方桌面端（Electron）同时跑同一份配置，只有一个能绑上 6700。
 {
