@@ -46,7 +46,7 @@ qq-ext-house-lite/
 
 ## 五个硬约束（踩过的坑）
 
-1. **必须走 `file://` 绝对 import + `getExtensionApi()`**。直接 `inject: ['qqBridge']` 在本机永远 pending：可选 inject 的解析顺序与插件加载顺序对不上。所以 `index.js` 里那一行 `BRIDGE_EXT` 是绝对路径。
+1. **必须走 `file://` 绝对 import + `getExtensionApi()`**。直接 `inject: ['qqBridge']` 在本机永远 pending：可选 inject 的解析顺序与插件加载顺序对不上。所以 `index.js` 用 `file://` 地址 import 桥的 `lib/extension.js`：默认按同装目录的兄弟包解析（`node_modules/qq-ext-*` 与 `dsh-qq-onebot-bridge` 并排），换布局时用 `QQBRIDGE_EXT_PATH` 指过去。
 2. **`apply()` 里的状态必须放模块级**。live reload 复用模块实例，state 写在 apply 内会每次多堆一个同名 provider，新工具因重名被跳过（trace 里一串 `skipped`）。
 3. **工具参数必须是标准 JSON Schema**。provider 链没有内置 `defineTool` 的方言编译器：属性内部写 `required: true` 会被 `assertSupportedJsonSchema` 直接拒，必须用 `required: ["name"]` 顶层数组。
 4. **provider 必须同步返回 `{ tools, sections }`**。返回 Promise 会被明确拒收（上游刻意不支持异步 provider，避免每轮装配被 IO 拖住）。
@@ -60,6 +60,6 @@ qq-ext-house-lite/
 
 ## 已知限制
 
-- `index.js` 里的 `BRIDGE_EXT` 是写死路径，换机器 / 换 profile 名要改三个文件。
+- 出口地址默认按兄弟包解析；只有包不放在桥旁边时才需要 `QQBRIDGE_EXT_PATH`（普通路径或 `file://` 都收），指到不存在的文件会告警并回落默认位置。
 - 单包 8 工具 / 4 提示段；三个包合计 17，距总量上限 24 还有 7 个位置。
 - 包是 `private: true` 的本地包，没有发布、没有版本语义，改动靠 commit。

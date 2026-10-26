@@ -17,10 +17,35 @@
  *   houseDir: 小屋目录名，默认「米白鲸私人小屋」（与桥的 config.houseDir 同义）
  */
 
+import { existsSync } from 'node:fs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
 export const name = 'qq-ext-house-lite'
 
-/** 出口模块的绝对 file:// 地址：package.json 的 exports 不含 ./lib/extension.js，只能用绝对路径 import。 */
-const BRIDGE_EXT = 'file:///C:/Users/Lenovo/.dsh/profiles/web/node_modules/dsh-qq-onebot-bridge/lib/extension.js'
+/**
+ * 出口模块的 file:// 地址（package.json 的 exports 不含 ./lib/extension.js，只能按绝对路径 import）。
+ *
+ * 解析顺序：
+ *   1. 环境变量 QQBRIDGE_EXT_PATH —— 路径或 file:// URL 都收，指的文件不存在时告警并往下走；
+ *   2. 同装目录的兄弟包 ../dsh-qq-onebot-bridge/lib/extension.js —— 默认布局
+ *      （profiles/web/node_modules/qq-ext-* 与 dsh-qq-onebot-bridge 并排），换机器、换 profile 名都不用改；
+ *   3. 都没有就返回 2 的地址，让 import 抛错时把路径带出来（比静默降级好查）。
+ *
+ * 早先这里写死过某台机器用户目录下的绝对路径：换机器即失效，也不该出现在公开仓库里。
+ */
+const DEFAULT_BRIDGE_EXT = new URL('../dsh-qq-onebot-bridge/lib/extension.js', import.meta.url)
+
+const resolveBridgeExt = () => {
+  const raw = String(process.env.QQBRIDGE_EXT_PATH || '').trim()
+  if (raw) {
+    const url = /^file:/i.test(raw) ? new URL(raw) : pathToFileURL(raw)
+    if (existsSync(fileURLToPath(url))) return url.href
+    console.warn('[qq-ext] QQBRIDGE_EXT_PATH 指向的文件不存在，改用默认位置：' + raw)
+  }
+  return DEFAULT_BRIDGE_EXT.href
+}
+
+export const bridgeExtUrl = resolveBridgeExt()
 
 /** body 也走 file URL：让缓存破坏参数（?t=）能生效。 */
 const BODY = new URL('./body.mjs', import.meta.url).href
@@ -86,7 +111,7 @@ export function apply(ctx, config) {
     if (inflight) return
     inflight = true
     try {
-      const mod = await import(BRIDGE_EXT)
+      const mod = await import(bridgeExtUrl)
       const api = typeof mod?.getExtensionApi === 'function' ? mod.getExtensionApi() : null
       if (!api || typeof api.registerToolProvider !== 'function') return
       if (api === lastApi && stillMounted()) return

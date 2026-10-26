@@ -15,10 +15,10 @@
 
 | 项 | 数量 |
 | --- | --- |
-| 修改文件（不含 `ext/`） | 20（19 个源文件 + `.gitattributes`） |
+| 修改文件（不含 `ext/` 与本文） | 20（19 个源文件 + `.gitattributes`） |
 | 增删行 | +10 238 / −1 664 |
 | 功能提交 | 17（`patch-01` … `patch-55`，编号是本地补丁库的历史编号） |
-| 新增目录 | `ext/`（三个 provider 示例包，17 个工具） |
+| 新增目录 | `ext/`（三个 provider 包，10 个文件，17 个工具） |
 
 改动最集中的文件：`lib/bridge.js`（约 +8 200）、`control/ui.html`（约 +1 100）、`lib/archive.js`（约 +880）、`control/lib/supervisor.mjs`、`lib/onebot.js`、`lib/dice.js`、`control/lib/perf.mjs`（新增）、`lib/index.js`、`lib/panel.js`。三个上游测试文件也被同步改过（`test/archive-unit.mjs`、`test/onebot-api-unit.mjs`、`test/find-unit.mjs`）。
 
@@ -116,7 +116,7 @@ grep -o "name: .qq_[A-Za-z0-9_]*" lib/bridge.js ext/*/body.mjs | wc -l   # 期�
 ## 6. 已知限制
 
 1. **版本绑定**：这些提交锚在 v0.7.0 的源码文本上，升级靠 rebase。上游改了同一区域就要人读一遍冲突。
-2. **`ext/` 里的 `BRIDGE_EXT` 是写死的绝对路径**（`file:///… /dsh-qq-onebot-bridge/lib/extension.js`）：换机器、换 profile 名字就要改三处 `index.js`。上游 `package.json` 的 `exports` 不含这个路径，所以只能绝对 import。
+2. **`ext/` 的出口地址**：包要 import 桥的 `lib/extension.js`，而上游 `package.json` 的 `exports` 不含它，只能按 `file://` 绝对地址 import。默认取同装目录的兄弟包（`node_modules/qq-ext-*` 与 `dsh-qq-onebot-bridge` 并排），非默认布局用环境变量 `QQBRIDGE_EXT_PATH` 覆盖（普通路径或 `file://` 都收）。
 3. `qq-tools.json` 的过滤只作用于桥建立的会话，管不到别的插件注册的工具。
 4. 记忆与历史归档**不按群隔离**（`memory-index/` 与归档目录是全局的），只有一个提示层规则要求模型注明来源。
 5. provider 接缝上限：单包 8 工具 / 4 提示段、总量 24 / 12、200 ms 预算、必须同步返回；`chips`（快捷挂载）上游明确不做。
