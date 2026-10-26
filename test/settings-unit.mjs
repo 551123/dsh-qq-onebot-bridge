@@ -2153,7 +2153,7 @@ const clientVersion = (() => {
       links: [
         { id: 'account', label: 'QQ助手账号（登录 / 扫码）', href: '/qqai/account', hint: '机器人账号的扫码 / 登录状态页；**需要先运行 NapCat**（没起来就点上面的「启动 NapCat」），点开就是带 token 的地址，不用手输' },
         { id: 'changelog', label: '更新日志（v9.9.9）', href: 'https://example.invalid/CHANGELOG.md', hint: '每个版本的改动' },
-        { id: 'readme-debug', label: '调试文档', href: 'https://example.invalid/README.md#调试v04一切皆可调试', hint: 'trace / 回放 / 体检 / 注入的用法' },
+        { id: 'readme-debug', label: '调试文档', href: 'https://example.invalid/docs/DEBUG.md', hint: 'trace / 回放 / 体检 / 注入的用法' },
         { id: 'console', label: '调试台（独立控制台）', href: '/qqai/console', running: false, state: '未启动 · 需要单独运行：node x', hint: '调试台是独立进程' },
       ],
       groups: [{

@@ -30,6 +30,7 @@
     "client",
     "control",
     "test",
+    "docs",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",

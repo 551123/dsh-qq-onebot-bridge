@@ -28,12 +28,16 @@ QQ 客户端 ←→ OneBot 实现（NapCat / LLOneBot / OpenShamrock / Lagrange�
 ## 安装 / 卸载
 
 ```sh
+
 # 安装（本地目录）：先在被安装的目录里装运行时依赖，再注册插件
+
 # 本地目录走 pnpm 的 link:，不会自动安装被链接包自己的依赖（ws）
+
 cd <本目录> && npm install --omit=dev
 dsh plugin --profile web add <本目录>
 
 # 卸载（随时可移除，独立 bundle 不影响其它插件）
+
 dsh plugin --profile web remove dsh-qq-onebot-bridge
 ```
 
@@ -358,17 +362,25 @@ ctx.qqBridge.registerToolProvider(({ agentCtx, route, key, config }) => ({
 60 个单测脚本，共 4014 项断言（`test/*-unit.mjs`）+ 3 个真机脚本：
 
 ```sh
+
 # 1) 单元测试：不联网、不起宿主，纯逻辑 + 临时目录（推荐每次改完都跑）
+
 node test/control-unit.mjs        # 也可以逐个跑：node test/<name>-unit.mjs
+
 #    61 个文件：桥的分支/命令/守卫、控制台 HTTP 与体检、录制回放与注入、注入安全边界、硬约束验收台、
+
 #    `/为什么` 的决策链翻译（why-unit）…
+
 #    一次性全跑（PowerShell）：
+
 #    Get-ChildItem test -Filter '*-unit.mjs' | ForEach-Object { node $_.FullName }
 
 # 2) 回放的端到端验收：真实桥代码 + 真实 OneBot 服务端，沙箱 + dry-run，不需要宿主
+
 node test/replay-live.mjs
 
 # 3) 真机脚本（需要宿主/控制台已在运行，自己扮演 OneBot 客户端连 6700）
+
 node test/live-e2e.mjs        # 消息 → 回复 全链路
 node test/live-stream.mjs     # 实时事件流 / 决策链 / 体检接口（控制台 8799）
 node test/replay-live-host.mjs --token <控制台 token>   # 录制 → 离线回放 → 注入
@@ -384,6 +396,7 @@ node test/replay-live-host.mjs --token <控制台 token>   # 录制 → 离线�
 ## ⚠️ 风险与合规说明（使用前必读）
 
 ### 账号风控风险
+
 - 本插件通过**第三方协议实现**（NapCat 等）接入 QQ，**不是腾讯官方接口**，与《QQ 软件许可及服务协议》相悖，QQ 官方明确禁止非官方客户端/协议
 - 使用第三方协议存在**账号被限制登录、冻结、甚至永久封禁**的风险，且可能波及其他正常使用的 QQ 账号（同设备/同 IP）
 - 建议使用**机器人小号**运行，绝不要用大号/常用号
@@ -391,20 +404,24 @@ node test/replay-live-host.mjs --token <控制台 token>   # 录制 → 离线�
 - 缓解建议：降低回复频率、仅在小群/自用场景运行、不 24 小时刷屏、严格内容合规
 
 ### 内容风控
+
 - agent 生成的一切内容都会以机器人账号身份发出，**使用者对该账号发布的内容负全部责任**
 - 建议在人设/系统提示中约束输出合规内容；违规内容既触发账号处罚，也可能带来法律责任
 
 ### 安全风险
+
 - `allowUsers` / `allowGroups` 未配置（为空）时，插件**默认拒绝所有私聊与群消息**——请显式填入自己的 QQ 号与群号后再使用；配置白名单后，白名单外的任何人都无法驱动你的 agent
 - 插件只监听 `127.0.0.1`，不要改成 `0.0.0.0` 暴露公网
 - 语音与图片会上传到第三方云服务（STT API）处理，**敏感语音请勿发送**
 
 ### 合规提示
+
 - 仅用于个人学习、内部小范围交流；不得用于批量营销、广告、骚扰、群控等用途
 - 遵守所在地区法律法规与腾讯平台规则
 - 使用第三方协议**风险自负**，本插件不提供任何免封号承诺
 
 ### 免责声明
+
 本插件仅供技术学习与个人研究使用。使用者应自行评估并承担使用第三方 QQ 协议的全部风险与后果。
 
 ## 安全注意
@@ -413,116 +430,23 @@ node test/replay-live-host.mjs --token <控制台 token>   # 录制 → 离线�
 - 端口仅监听 127.0.0.1；不要对外暴露
 - OneBot 实现本身有 QQ 封号风险，使用第三方机器人协议需自行评估
 
-## 调试（v0.4「一切皆可调试」）
+## 更多文档
 
-每条入站消息都有一个 **traceId**，每个决策点（**包括每一次"不回复/丢弃/降级"**）都会留下 `stage + ok + reason + 耗时`。这是本版本的核心设计理念：出问题时不用猜。
-
-| 想看什么 | 在哪看 |
-|---|---|
-| **6 条硬约束此刻达标吗** | 控制台最上面「**硬约束验收台**」：6 行状态灯 + 机器上现有的证据 + 该点哪里的提示，每 30 秒自动重算 |
-| 单条消息的完整决策链 | 控制台「实时事件流」点任意一行 → 「决策链」显示时间轴、停在哪一步、为什么 |
-| 为什么机器人不回复 | 「实时事件流」筛"仅被拒/失败"，最常见原因直接列出（如 `mention: 群聊未 @ 机器人`） |
-| 每个端口的占用与在线 | 控制台「端口 / 进程」（6700 的连接数即机器人在线） |
-| 一键排查 | 控制台「一键体检」：15-19 项 pass/fail + 修复建议（依赖路径、端口、链路、快照、错误、闸门拒绝…） |
-| 生效配置（为什么功能没生效） | 控制台「运行快照」里的"关闭中的开关"；完整字段在 `qq-runtime.json` 的 `features`（不含任何密钥） |
-| 打包给别人看 | 「导出诊断包」→ 一个 zip（事件流/审计/桥日志/宿主日志/运行快照/体检报告/环境信息） |
-| 文件级排查 | `qq-trace.jsonl`（结构化事件，可 `jq`/grep）、`qq-bridge-debug.log`、`qq-actions.log`（写操作审计）、`qq-host-out.log`/`err.log` |
-
-相关配置：`traceEnabled`（默认开）、`traceLevel`（`debug` 全量 / `warn` 只留问题）、`traceMemorySize`、`traceFile`。
-调试接口（控制台，token + Origin 双重校验）：`/api/trace`、`/api/stream`（SSE）、`/api/runtime`、`/api/diagnose`、`/api/export`。
-
-### 录制 · 离线回放 · 事件注入（v0.4 阶段 3）
-
-前两项解决了"现在发生了什么"，这三项解决"这条消息当时为什么这样、换成别的输入会怎样"。
-
-| 能力 | 怎么用 | 说明 |
-|---|---|---|
-| 录制 | 自动 | 桥收到的每条消息/通知/请求都追加到 `qq-inbox.jsonl`（可 JSON 逐行解析、按大小轮转），只写本机、不改任何回复行为 |
-| 离线回放 | 控制台「录制 · 回放 · 注入」→ 某行「回放这条」／「回放最近 5 条」 | 在**沙箱目录**里用**真实桥代码**重跑这条消息：dry-run 拦截所有出站、不建任何 QQ 连接、源目录一个字节都不改。结论逐条给出"会回复/静默/出错 + 原因 + 会发送什么" |
-| 事件注入 | 控制台填 群号/QQ 号/文本 → 「注入」 | 写一行到 `qq-inject.jsonl`，桥按 `injectIntervalMs`（默认 2s）轮询后**走真实管线**处理；`injectDryRun`（默认开）下所有出站调用被拦截并计数，注入内容永远不会真的发到 QQ |
-
-回放的保真度来自**运行时快照里的线上决策配置**（白名单、安静时段、各功能开关等 28 项，见 `qq-runtime.json` 的 `replay`）：否则插件默认值里"白名单为空 = 拒绝一切"会让回放全部判成静默。回放里**不含真实模型输出**——模型那一轮用一条带 `[回放]` 前缀的模拟回复代替，用来验证链路与分支，不验证措辞。
-
-排障要点：
-
-- 注入通道未开启时会**直接报错并说明开关名**（`injectEnabled`），不会静默丢进队列；
-- 注入触发的 **agent 回合是异步的**：dry-run 窗口只在同步阶段开着，所以模型真正的回复会在事件流里被单独拦下（`注入回合的模型回复已被拦截（dry-run，未发送）：<原文>`）——注入既能走真实管线，又不会漏发一条；真人消息不受影响（收到真实消息立即解除该标记）；
-- 回放的帧在事件流里标为 `replay: 离线回放（沙箱 + dry-run，不碰 QQ）`，注入的帧标为 `inject: 来自注入器`，两者不会互相误判；
-- 桥启动时若队列里已有历史行，会跳过它们并在事件流里记一条"本次启动跳过 N 行（只处理启动后新增的行）"，避免重启后重放旧注入；
-- 注入的帧不会被二次录制（否则回放/注入会互相激发）；
-- 回放沙箱默认保留最近 5 次，更旧的**移入回收站**（`qq-replay/_trash/<日期>/`），不做物理删除。
-
-相关配置：`recordInbound`（默认开）、`inboxFile`、`inboxRedact`、`injectEnabled`（默认关）、`injectFile`、`injectDryRun`（默认开）、`injectIntervalMs`。
-调试接口：`/api/inbox`、`/api/replay`、`/api/inject`、`/api/queue/clear`。
-
-### 硬约束验收台（v0.4 阶段 4）
-
-上面两条解决了"现在发生了什么"和"当时为什么这样"。验收台解决第三个问题：**设计理念有没有真的落地**。
-
-`GET /api/acceptance` 把 6 条硬约束逐条用**机器上现有的产物**算成 `✅ 达标 / ⚠️ 有提示 / ❌ 不达标 / ❔ 证据不足`，并给出证据与下一步：
-
-| 约束 | 判定用的证据 |
-|---|---|
-| ① 无静默分支 | 最近 500 条事件里所有 `ok:false`（被拒/失败）事件是否都带非空 reason；缺的会点名 stage |
-| ② 可关联（traceId） | 消息级事件的 traceId 覆盖率、有多少条消息真正走完 `inbound→reply` |
-| ③ 可回放 | 录制条数 + 最近一次回放的统计与**安全保证**（dry-run 开、QQ 连接 0、cwd 已沙箱化）；dry-run 被关掉直接判不达标 |
-| ④ 可体检 | 体检通过数/失败数/blocker 数与结论，失败项点名 |
-| ⑤ 可导出 | 诊断包会收集的产物有几类在位（或最近一次导出的体积与文件名） |
-| ⑥ 可注入 | 通道开关、dry-run 开关（关掉→不达标，因为会真发 QQ）、已消费行数、以及**拦下过几次异步 agent 回合的回复** |
-
-每一项都能点「去看 →」跳到对应卡片（事件流/决策链/回放结果/体检/日志/注入）；结论为 `all-green / partial / unknown / broken` 四种。
-纯函数实现（`control/lib/acceptance.mjs`），所以每条分支都有断言覆盖；面板每 30 秒自动刷新，回放结束后立刻重算。
-
-## 看得见 · 找得回（v0.5）
-
-v0.5 做两件事：把**已经封装好、却从没接上线**的能力接通，再补上"群里的东西能找回来"。
-
-### 合并转发展开（先修一个违反硬约束的洞）
-
-以前别人把「聊天记录」合并转发给机器人时，`parseMessage` 里根本没有 `forward` 分支，这条消息在传输层就被静默丢掉——**连 trace 都没有**，直接违反 v0.4 的第一条硬约束。现在：
-
-- `forwards` 会被识别，经 `get_forward_msg` 展开成 `[转发聊天记录] 昵称: 内容` 交给模型（默认最多 50 条 / 4000 字，只展开一层，不递归）
-- 群里仍然要 @ 机器人才处理（空文本不再绕过 @ 门与 `acceptPrivate` 门——这两个门都补上了）
-- `forwardExpandEnabled: false` 可关闭；回放/注入模式（dry-run）不访问 QQ，注入时可用 `forwardText` 直接喂一份正文
-
-### 接通的既有能力
-
-| 能力 | 用法 |
-|---|---|
-| 群成员 | `/成员` 看名单（按身份/等级排序，标注头衔与禁言中）· `/成员 @某人` / `/成员 昵称` / `/成员 QQ号` 看详情（身份/等级/头衔/入群时间/最后发言/禁言状态）；agent 工具 `qq_member_info` |
-| 群资料 | `/群信息`（群名/群号/人数与上限/群主/建群时间） |
-| 好友列表 | `/好友`（**隐私项，默认关闭** `friendListEnabled`，且仅私聊里的管理员可用） |
-| 群历史 | agent 工具 `qq_recent_history`（拉本会话最近 N 条，群聊/私聊都支持） |
-| 表情回应 | agent 工具 `qq_react`（给消息贴 👍 之类，而不是发一条消息；写操作，过闸门） |
-| 退群 | `/退群 确认`（**默认关闭** `leaveGroupEnabled`，必须显式二次确认，走闸门） |
-
-### 群资产（只读为主）
-
-| 命令 | 说明 |
-|---|---|
-| `/文件` | 列群文件与文件夹（文件名/大小/上传者/时间） |
-| `/文件 <文件夹名>` | 进文件夹列文件 |
-| `/取 <文件名>` | 下载群文件到 `cwd/qq-files/` 并**只发到发起人私聊**（不往群里丢文件）；精确/前缀/模糊匹配，文件名消毒（去路径、去 Windows 非法字符、保留名加前缀） |
-| `/相册` | 列群相册（NapCat `get_qun_album_list`） |
-| `/ocr` | 引用一张图片发 `/ocr`，用 NapCat 的 `ocr_image` 读出图里的文字（不消耗模型） |
-
-### 历史检索与归档
-
-- 每条白名单会话的真实消息按天归档到 `cwd/qq-history/YYYY-MM-DD.jsonl`；**注入/回放的假事件不入档**，`/` 开头的命令也不入档（否则每次 `/找 X` 都会命中自己刚敲的查询词）
-- `/找 关键词`（空格分隔 = 同时包含，大小写不敏感）检索本会话最近 N 天；agent 工具 `qq_search_history` 同源同口径
-- 保留期默认 90 天，过期分片在宿主启动时**移入** `qq-trash/<日期>/` 而不是删除
-- 控制台新增「群资产 · 历史检索」卡片：看归档体积与时间范围、直接检索（与群内 `/找` 复用同一套解析）
-
-新增配置（括号内为默认值）：`forwardExpandEnabled`(true) `forwardMaxNodes`(50) `forwardMaxChars`(4000) `memberQueryEnabled`(true) `memberListLimit`(20) `friendListEnabled`(false) `historyQueryEnabled`(true) `historyQueryLimit`(20) `reactToolEnabled`(true) `leaveGroupEnabled`(false) `ocrEnabled`(true) `ocrMaxImages`(3) `groupFileEnabled`(true) `groupFileDownloadEnabled`(true) `groupFileListLimit`(20) `groupFileMaxBytes`(50 MiB) `albumEnabled`(true) `historyArchiveEnabled`(true) `historyArchiveDir`("") `historyArchiveKeepDays`(90) `historySearchEnabled`(true) `historySearchDays`(7) `historySearchLimit`(20)。
+- **[docs/DEBUG.md](docs/DEBUG.md)** —— 调试 / 排障：trace、离线回放、事件注入、一键体检、诊断包、硬约束验收台
+- **[docs/FEATURES.md](docs/FEATURES.md)** —— v0.5 能力细节：合并转发展开、`/文件` `/取` `/相册` `/ocr`、按天归档与 `/找`、群成员与群信息、表情反应
 
 ## 独立控制台（control/，v0.4.0）
 
 插件自带一个**独立的本地运维端**，不依赖 DSH 桌面端：宿主挂掉时它照常可用，端口与进程一目了然。
 
 ```sh
+
 # 启动（默认 http://127.0.0.1:8799，启动后打印带 token 的地址）
+
 npm run control            # 或 node control/bin/qq-control.mjs --open
+
 # 也可以双击 control/启动控制台.bat
+
 ```
 
 | 能力 | 说明 |

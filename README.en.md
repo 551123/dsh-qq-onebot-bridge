@@ -17,13 +17,18 @@ QQ client ←→ OneBot implementation (NapCat / LLOneBot / OpenShamrock / Lagra
 ## Install / uninstall
 
 ```sh
+
 # install (local directory): install the runtime dependency inside the directory first,
+
 # then register the plugin — a local directory is linked with pnpm's `link:`, which does
+
 # not install the linked package's own dependencies (`ws`)
+
 cd <this-directory> && npm install --omit=dev
 dsh plugin --profile web add <this-directory>
 
 # uninstall anytime (independent bundle, does not affect other plugins)
+
 dsh plugin --profile web remove dsh-qq-onebot-bridge
 ```
 
@@ -352,115 +357,23 @@ Once something is public and used, it cannot be renamed casually — so the rule
 - Host error log: redirect stderr when starting `dsh web` (e.g. `D:\qq-work\qq-host-err.log`) to diagnose startup crashes
 - Key log markers: `voice fetched via get_record`, `quoted voice transcribed`, `followup sent (voice)`, `group msg without @bot ignored`
 
-## Debugging (v0.4 "everything debuggable")
+## More docs
 
-Every inbound message gets a **trace id**, and every decision point — **including every silent drop** — records `stage + ok + reason + duration`. That is the design philosophy of this release: when something goes wrong you should never have to guess.
-
-| What you want to know | Where to look |
-|---|---|
-| **Are the 6 hard constraints met right now?** | Console → "**硬约束验收台**" at the top: 6 status lights, the evidence currently on the machine, and where to click next; recomputed every 30s |
-| The full decision chain of one message | Console → "实时事件流": click any row, the "决策链" card shows the timeline, where it stopped and why |
-| Why the bot did not reply | Filter the event stream to failures — the most common reasons are listed (e.g. `mention: 群聊未 @ 机器人`) |
-| Port ownership and liveness | Console → "端口 / 进程" (connections on 6700 = bot online) |
-| One-click triage | Console → "一键体检": 15-19 pass/fail checks with fix hints (paths, ports, link, snapshot, errors, gate denials…) |
-| Effective config (why a feature is off) | Console → "运行快照" ("关闭中的开关"); full fields in `qq-runtime.json` → `features` (never any secret) |
-| A bundle to hand to someone else | "导出诊断包" → one zip (events, audit, bridge log, host logs, runtime snapshot, diagnosis, environment) |
-| File-level digging | `qq-trace.jsonl` (structured events, jq/grep friendly), `qq-bridge-debug.log`, `qq-actions.log` (write-action audit), `qq-host-out.log` / `err.log` |
-
-Config: `traceEnabled` (on by default), `traceLevel` (`debug` = everything, `warn` = problems only), `traceMemorySize`, `traceFile`.
-Debug endpoints (console, token + Origin guarded): `/api/trace`, `/api/stream` (SSE), `/api/runtime`, `/api/diagnose`, `/api/export`.
-
-### Recording · offline replay · event injection (v0.4 phase 3)
-
-The first two answer "what is happening right now"; these three answer "why did *this* message go that way, and what would a different input do".
-
-| Capability | How | Detail |
-|---|---|---|
-| Recording | automatic | every inbound message/notice/request is appended to `qq-inbox.jsonl` (JSONL, size-rotated). Local file only, never changes how the bot replies |
-| Offline replay | console → "录制 · 回放 · 注入" → "回放这条" / "回放最近 5 条" | re-runs that message through the **real bridge code** inside a **sandbox directory**: dry-run intercepts every outbound call, no QQ connection is ever created, the live working directory is not touched. Each entry gets a verdict — replied / silent / error — **with the reason** and what it would send |
-| Event injection | console → fill group id / QQ id / text → "注入" | appends a line to `qq-inject.jsonl`; the bridge polls it (`injectIntervalMs`, default 2s) and feeds it through the **real pipeline**. With `injectDryRun` (default on) every outbound call is intercepted and counted, so injected content is never actually sent to QQ |
-
-Replay fidelity comes from the live decision config carried in the runtime snapshot (allowlists, quiet hours, feature switches — 28 keys under `replay` in `qq-runtime.json`); without it the plugin defaults ("empty allowlist = deny everything") would make every replay look silent. Replay does **not** contain real model output: the model turn is replaced by a canned line prefixed with `[回放]`, so it validates the pipeline and the branch, not the wording.
-
-Operational notes:
-
-- if the injection channel is off the console **fails loudly with the switch name** (`injectEnabled`) instead of silently queueing;
-- the injected **agent turn is asynchronous**: the dry-run window only covers the synchronous stage, so the model's actual reply is intercepted separately and recorded in the event stream (`injected turn reply suppressed (dry-run, not sent): <text>`). Injection therefore runs the real pipeline without ever leaking a message; a real inbound message clears the mark immediately;
-- replayed frames are marked `replay: offline replay (sandbox + dry-run, never touches QQ)` while injected frames are marked `inject`, so the two never get confused;
-- lines already present when the bridge starts are skipped, with a recorded reason ("skipped N historical lines, only lines appended after start are processed") — a restart never replays old injections;
-- injected frames are never recorded, so injection and replay cannot feed each other;
-- replay sandboxes: the newest 5 are kept, older ones are **moved to the recycle/trash directory** (`qq-replay/_trash/<date>/`), never deleted outright.
-
-Config: `recordInbound` (on), `inboxFile`, `inboxRedact`, `injectEnabled` (off), `injectFile`, `injectDryRun` (on), `injectIntervalMs`.
-Endpoints: `/api/inbox`, `/api/replay`, `/api/inject`, `/api/queue/clear`.
-
-### Hard-constraint acceptance page (v0.4 phase 4)
-
-The two features above answer "what is happening" and "why did this message go that way". The acceptance page answers the third question: **did the design philosophy actually land?**
-
-`GET /api/acceptance` turns each of the 6 hard constraints into `✅ met / ⚠️ hint / ❌ not met / ❔ not enough evidence`, computed from artefacts that already exist on the machine, plus the evidence and the next step:
-
-| Constraint | Evidence used |
-|---|---|
-| ① No silent branch | every `ok:false` event (rejected/failed) in the last 500 events must carry a non-empty reason; missing ones are named by stage |
-| ② Correlatable (traceId) | traceId coverage of message-scoped events and how many messages actually reached `inbound→reply` |
-| ③ Replayable | recording count plus the last replay's stats and **safety** (dry-run on, 0 QQ connections, sandboxed cwd); dry-run being off fails the row |
-| ④ Diagnosable | diagnosis pass/fail/blocker counts and verdict, failing checks named |
-| ⑤ Exportable | how many of the bundle's source artefacts are present (or the last export's size and filename) |
-| ⑥ Injectable | channel switch, dry-run switch (off ⇒ not met, because it would send to QQ), lines consumed, and how many **asynchronous agent-turn replies have been intercepted** |
-
-Every row has a "去看 →" link that jumps to the matching card; the verdict is one of `all-green / partial / unknown / broken`. The evaluator is a pure function (`control/lib/acceptance.mjs`) with every branch asserted in tests, refreshed every 30s and immediately after a replay finishes.
-
-## See it, find it (v0.5)
-
-v0.5 does two things: it wires up capabilities that were **already implemented but never called**, and it makes "what the group already said" findable again.
-
-### Merged-forward expansion (fixing a hard-constraint violation first)
-
-Until v0.5 a merged-forward ("chat record") card was dropped **inside the transport layer**: `parseMessage` had no `forward` branch, so a message containing only a card was silently discarded — with no `message` event and not even a trace line, violating v0.4's first hard constraint. Now:
-
-- `forwards` is recognised and expanded via `get_forward_msg` into `[转发聊天记录] nickname: content` for the model (default max 50 nodes / 4000 chars, one level only, never recursive)
-- Groups still require an @-mention, and the empty-text path now goes through both the @ gate and the `acceptPrivate` gate (it used to bypass them)
-- `forwardExpandEnabled: false` turns it off; replay/injection (dry-run) never touches QQ, and an injection may carry `forwardText` to feed a transcript directly
-
-### Capabilities that are now actually wired up
-
-| Capability | How to use it |
-|---|---|
-| Group members | `/成员` lists the roster (owner → admins → members, level desc, titles and mutes marked) · `/成员 @someone` / `/成员 nickname` / `/成员 <qq>` shows one member's card, level, title, join date, last message and mute state; agent tool `qq_member_info` |
-| Group info | `/群信息` (name, id, member count and cap, owner, creation time) |
-| Friend list | `/好友` (**off by default** via `friendListEnabled`; private chats from an admin only) |
-| Chat history | agent tool `qq_recent_history` (last N messages of this chat, groups and private chats) |
-| Emoji reaction | agent tool `qq_react` (reacts to a message instead of sending one; a write action, gated) |
-| Leaving a group | `/退群 确认` (**off by default** via `leaveGroupEnabled`, explicit second confirmation, gated) |
-
-### Group assets (read-only by default)
-
-| Command | What it does |
-|---|---|
-| `/文件` | Lists group files and folders (name / size / uploader / time) |
-| `/文件 <folder>` | Lists the files inside one folder |
-| `/取 <name>` | Downloads a group file into `cwd/qq-files/` and delivers it **to the requester's private chat only** (never posted into the group); exact → prefix → fuzzy matching, with the file name sanitised (path stripped, Windows-illegal characters removed, reserved names prefixed) |
-| `/相册` | Lists the group albums (NapCat `get_qun_album_list`) |
-| `/ocr` | Quote an image and send `/ocr` to read its text with NapCat's `ocr_image` (no model call) |
-
-### History archive & search
-
-- Every real allowlisted message is archived per day into `cwd/qq-history/YYYY-MM-DD.jsonl`; **injected/replayed frames are never archived**, and `/`-commands are skipped too (otherwise every `/找 X` would hit the query line it just wrote)
-- `/找 <keywords>` (space-separated = all must match, case-insensitive) searches this chat's last N days; the `qq_search_history` agent tool shares the same index and semantics
-- Retention defaults to 90 days; expired day files are **moved** into `qq-trash/<date>/` on host start, never deleted
-- The console gained an "assets · history search" card (archive size and date range, plus keyword search reusing the plugin's own parser)
-
-New config keys (defaults in brackets): `forwardExpandEnabled`(true) `forwardMaxNodes`(50) `forwardMaxChars`(4000) `memberQueryEnabled`(true) `memberListLimit`(20) `friendListEnabled`(false) `historyQueryEnabled`(true) `historyQueryLimit`(20) `reactToolEnabled`(true) `leaveGroupEnabled`(false) `ocrEnabled`(true) `ocrMaxImages`(3) `groupFileEnabled`(true) `groupFileDownloadEnabled`(true) `groupFileListLimit`(20) `groupFileMaxBytes`(50 MiB) `albumEnabled`(true) `historyArchiveEnabled`(true) `historyArchiveDir`("") `historyArchiveKeepDays`(90) `historySearchEnabled`(true) `historySearchDays`(7) `historySearchLimit`(20).
+- **[docs/DEBUG.en.md](docs/DEBUG.en.md)** — debugging: trace, offline replay, event injection, one-shot diagnostics, diagnostic bundles, acceptance page
+- **[docs/FEATURES.en.md](docs/FEATURES.en.md)** — v0.5 details: merged-forward expansion, `/文件` `/取` `/相册` `/ocr`, per-day archive and `/找`, members and group info, reactions
 
 ## Standalone control console (`control/`, v0.4.0)
 
 The plugin ships an independent local operations console that does **not** depend on DSH Desktop: it keeps working when the host is down, and shows every port and process at a glance.
 
 ```sh
+
 # starts on http://127.0.0.1:8799 and prints the tokenised URL
+
 npm run control            # or: node control/bin/qq-control.mjs --open
+
 # on Windows you can also double-click control/启动控制台.bat
+
 ```
 
 | Capability | Detail |
@@ -483,17 +396,25 @@ npm run control            # or: node control/bin/qq-control.mjs --open
 60 unit suites, 4014 assertions in `test/*-unit.mjs`, plus 3 live scripts:
 
 ```sh
+
 # 1) unit tests: no network, no host, pure logic in temp dirs (run after every change)
+
 node test/control-unit.mjs        # or one at a time: node test/<name>-unit.mjs
+
 #    61 files: bridge branches/commands/guards, console HTTP + diagnosis, recording/replay/injection,
+
 #    injection safety boundaries, the hard-constraint acceptance page, the `/why` decision-chain wording…
+
 #    run them all (PowerShell):
+
 #    Get-ChildItem test -Filter '*-unit.mjs' | ForEach-Object { node $_.FullName }
 
 # 2) replay end-to-end acceptance: real bridge code + real OneBot server, sandbox + dry-run, no host needed
+
 node test/replay-live.mjs
 
 # 3) live scripts (host/console already running; they impersonate the OneBot client on 6700)
+
 node test/live-e2e.mjs        # message -> reply, full path
 node test/live-stream.mjs     # event stream / decision chain / diagnosis endpoints (console 8799)
 node test/replay-live-host.mjs --token <console token>   # record -> offline replay -> injection
@@ -509,6 +430,7 @@ This plugin ships **no persona, preferences, or group rules**. The whale-girl pe
 ## ⚠️ Risks & compliance (read before use)
 
 ### Account risk control
+
 - This plugin connects to QQ through **third-party protocol implementations** (NapCat etc.), which are **not official Tencent APIs** and conflict with the QQ license agreement; Tencent explicitly bans unofficial clients/protocols
 - Using third-party protocols carries the risk of **login restrictions, freezes, or permanent bans**, and may affect other QQ accounts on the same device/IP
 - Use a **dedicated bot account** — never your main account
@@ -516,20 +438,24 @@ This plugin ships **no persona, preferences, or group rules**. The whale-girl pe
 - Mitigations: lower reply frequency, run only in small/private groups, avoid 24/7 spamming, keep content compliant
 
 ### Content compliance
+
 - Everything the agent generates is sent under the bot account — **you are responsible for everything published by that account**
 - Constrain outputs in the persona/system prompt; violating content triggers account penalties and possibly legal liability
 
 ### Security
+
 - With `allowUsers` / `allowGroups` unset (empty), the plugin **denies all private and group messages by default** — explicitly list your own QQ id and the groups to serve before use; once configured, nobody outside the allowlists can drive your agent
 - The plugin listens on `127.0.0.1` only; do not change it to `0.0.0.0`
 - Voice and images are uploaded to third-party cloud services (STT API) — **do not send sensitive audio**
 
 ### Compliance tips
+
 - For personal learning and small internal groups only; do not use for mass marketing, advertising, harassment, or bot-farming
 - Comply with local laws and Tencent platform rules
 - Using third-party protocols is **at your own risk**; this plugin offers no ban-free guarantee
 
 ### Disclaimer
+
 This plugin is provided for technical learning and personal research. Users must assess and bear all risks and consequences of using third-party QQ protocols themselves.
 
 ## Security notes
