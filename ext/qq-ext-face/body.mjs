@@ -271,7 +271,8 @@ export function provider(context = {}) {
     const sections = config.facePromptSection === false ? [] : [faceSection(config, workspaceRoot)]
     return { tools, sections }
   } catch (error) {
-    return { tools: [], sections: [], reason: 'qq-ext-face: ' + String(error?.message ?? error) }
+    // 同 index.js：返回 reason 上游不读，抛出去才会进 trace。
+    throw new Error('qq-ext-face(body): ' + String(error?.message ?? error))
   }
 }
 

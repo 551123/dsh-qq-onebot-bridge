@@ -7,7 +7,8 @@
  * 三条硬约束（provider 工具与 defineTool 方言不同，回归断言在 tools/test-ext-house-lite.mjs）：
  *   1. 参数与输出必须是标准 JSON Schema —— required 只能写在 object 上、且是数组；
  *   2. provider 必须同步返回 { tools, sections }，返回 Promise 会被 extension.js 拒收；
- *   3. 单次注入 toolsPerProvider 上限 8 —— 本包正好 8 个，再多会被静默截断。
+ *   3. 单次注入 toolsPerProvider 上限 16（v0.7.4 起；v0.7.0 是 8，本包当时正好顶线）—— 超出不再静默丢弃，
+ *      桥会把它记进 skipped，面板「实验性」组的状态行能看见。
  */
 
 import fs from 'node:fs'
@@ -433,7 +434,8 @@ export function provider(context = {}) {
     if (context?.config?.houseToolsEnabled === false) return { tools: [], sections: [] }
     return { tools: makeTools(context?.config ?? {}, workspaceRoot), sections: [] }
   } catch (error) {
-    // provider 抛错只跳过自己，但这里再兜一层：坏掉的第三方不该让整条消息失败。
-    return { tools: [], sections: [], reason: 'qq-ext-house-lite: ' + String(error?.message ?? error) }
+    // 上游 registerToolProvider 只读 tools/sections，返回里的 reason 会被丢弃 —— 那就是静默失败。
+    // 抛错才是可见的：extension.js 会把这一包单独跳过并写进 trace，其它包不受影响。
+    throw new Error('qq-ext-house-lite: ' + String(error?.message ?? error))
   }
 }

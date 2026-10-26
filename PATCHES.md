@@ -119,7 +119,7 @@ grep -o "name: .qq_[A-Za-z0-9_]*" lib/bridge.js ext/*/body.mjs | wc -l   # 期�
 2. **`ext/` 的出口地址**：包要 import 桥的 `lib/extension.js`，而上游 `package.json` 的 `exports` 不含它，只能按 `file://` 绝对地址 import。默认取同装目录的兄弟包（`node_modules/qq-ext-*` 与 `dsh-qq-onebot-bridge` 并排），非默认布局用环境变量 `QQBRIDGE_EXT_PATH` 覆盖（普通路径或 `file://` 都收）。
 3. `qq-tools.json` 的过滤只作用于桥建立的会话，管不到别的插件注册的工具。
 4. 记忆与历史归档**不按群隔离**（`memory-index/` 与归档目录是全局的），只有一个提示层规则要求模型注明来源。
-5. provider 接缝上限：单包 8 工具 / 4 提示段、总量 24 / 12、200 ms 预算、必须同步返回；`chips`（快捷挂载）上游明确不做。
+5. provider 接缝上限：单包 16 工具 / 4 提示段、总量 40 / 12、200 ms 预算、必须同步返回（v0.7.4 从 8/24 放宽，且超出不再静默丢弃，改记 skipped）；`chips`（快捷挂载）上游明确不做。
 6. 人设正文改动需要重启宿主；控制台是独立进程，重启 DSH 桌面端不会自动带起它。
 
 ## 7. 提交清单（`v0.7.0..HEAD`）

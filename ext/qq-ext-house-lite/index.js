@@ -65,12 +65,17 @@ export async function attach(api, state = {}, opts = {}) {
   state.disposer = null
   const body = await import(BODY + '?t=' + String(opts.stamp ?? Date.now()))
   const fn = typeof body?.provider === 'function' ? body.provider : null
-  if (!fn) return { registered: false, reason: 'body.mjs 没有导出 provider' }
+  if (!fn) {
+    console.warn('[qq-ext-house-lite] body.mjs 没有导出 provider —— 这一包的能力不会出现在工具清单里')
+    return { registered: false, reason: 'body.mjs 没有导出 provider' }
+  }
   state.disposer = api.registerToolProvider((context) => {
     try {
       return fn(context)
     } catch (error) {
-      return { tools: [], sections: [], reason: 'qq-ext-house-lite: ' + String(error?.message ?? error) }
+      // 上游 registerToolProvider 只读 tools / sections，返回里的 reason 会被直接忽略 —— 那等于静默失败。
+      // 抛出去才会被桥记进 trace / skipped，面板「实验性」组才看得见是哪一包挂了。
+      throw new Error('qq-ext-house-lite: ' + String(error?.message ?? error))
     }
   }, { name: name + (body.variant ? '#' + body.variant : '') })
   return { registered: true, variant: body.variant ?? '', tools: body.provider?.({ config: {} })?.tools?.length ?? 0 }
