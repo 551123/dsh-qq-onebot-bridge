@@ -1,0 +1,9 @@
+{
+  "name": "qq-ext-house-lite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "小屋 8 个写/读工具（从补丁 42 迁出）",
+  "license": "MIT"
+}

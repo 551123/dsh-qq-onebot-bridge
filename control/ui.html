@@ -98,10 +98,15 @@
       <a id="napcatLink" href="#" target="_blank"><button>QQ助手账号</button></a>
     </div>
     <div class="grid2" style="margin-top:10px">
-      <label class="meta">宿主工作目录<input id="cfgCwd" /></label>
+      <label class="meta">宿主工作目录<input id="cfgCwd" /><span class="meta" id="cfgCwdHint" style="display:block"></span><button type="button" onclick="useBridgeCwd()">用桥的目录</button></label>
       <label class="meta">dsh bin.js 路径<input id="cfgDshBin" /></label>
-      <label class="meta">NapCat 启动脚本<input id="cfgNapcatBat" placeholder="…\NapCat\bootmain\launcher.bat" /></label>
+      <label class="meta">NapCat 启动脚本<input id="cfgNapcatBat" placeholder="…\NapCat\bootmain\launcher.bat，或 NapCatQQ-Desktop.exe" /></label>
       <label class="meta">GPT-SoVITS 启动脚本<input id="cfgTtsBat" /></label>
+    </div>
+    <!-- 补丁 34：路径框旁边直接给状态和探测按钮 —— "框空了"要能一眼分清是"没配"还是"配的文件不存在"。 -->
+    <div class="row" style="margin-top:6px;align-items:center">
+      <button onclick="detectNapcat()">自动探测 NapCat</button>
+      <span class="meta" id="napcatPathOut">（未检测）</span>
     </div>
     <!--
       这段提示是 issue #2 的直接产物：用户按报错里的 "shimFile" 去文件夹里翻了五小时。
@@ -258,6 +263,24 @@
   </section>
 
   <section class="card" style="grid-column:1/-1">
+    <h2>工具参考 <span class="meta" id="toolsMeta">（21 个 qq_* 工具目录 + 每个会话命中哪条白名单规则；只读，改表用 tools/qq-tools.mjs）</span></h2>
+    <div class="row">
+      <button onclick="loadTools()">刷新</button>
+      <span class="meta" id="toolsState"></span>
+    </div>
+    <pre id="toolsOut">（点「刷新」看工具目录与白名单命中）</pre>
+  </section>
+
+  <section class="card" style="grid-column:1/-1">
+    <h2>用量与花费 <span class="meta" id="usageMeta">（按会话归集的 token 与金额估算；只读，数据来自桥写的 qq-usage-summary.json）</span></h2>
+    <div class="row">
+      <button onclick="loadUsage()">刷新</button>
+      <span class="meta" id="usageState"></span>
+    </div>
+    <pre id="usageOut">（点「刷新」看今日 / 近 7 天 / 花费最高的会话）</pre>
+  </section>
+
+  <section class="card" style="grid-column:1/-1">
     <h2>群配置 <span class="meta" id="groupsMeta">（每个群的生效开关 + 白名单 + 最近回合）</span></h2>
     <div class="row">
       <button onclick="loadGroups()">刷新</button>
@@ -276,6 +299,17 @@
     </div>
     <div style="margin-top:8px"><img id="qrImg" alt="登录二维码" style="display:none;width:220px;height:220px;image-rendering:pixelated;background:#fff;padding:6px;border-radius:8px" /></div>
     <pre id="qrHint">（点「刷新二维码」）</pre>
+  </section>
+
+  <section class="card" style="grid-column:1/-1">
+    <h2>能力开关 <span class="meta" id="capsMeta">（9 张表：预设按钮 / 换算说明 / 群号下拉 / 行编辑器都能直接点；保存即生效——桥按 5 秒热读，不用重启 dsh web）</span></h2>
+    <div class="row">
+      <button onclick="loadCaps()">刷新</button>
+      <button onclick="capsCollapseAll(true)">全部收起</button>
+      <button onclick="capsCollapseAll(false)">全部展开</button>
+      <span class="meta" id="capsState"></span>
+    </div>
+    <div id="capsOut" class="meta">（点「刷新」加载全部表；每张表都能单独开关、保存、删除）</div>
   </section>
 
   <section class="card" style="grid-column:1/-1">
@@ -321,6 +355,7 @@ let currentLog = 'hostOut';
 let streamEvents = [];
 let diagReport = null;
 let lastRuntime = null;
+let lastStatus = null;
 const pageErrors = [];
 
 // 面板自己也要可调试：任何脚本错误 / 未处理的 Promise 失败都直接显示出来。
@@ -331,8 +366,26 @@ function reportPageError(text) {
   el.style.display = '';
   el.innerHTML = '<h2>面板脚本错误（请连同这条截图反馈）</h2>' + pageErrors.map((line) => `<div class="check"><span>❌</span><div>${line}</div></div>`).join('');
 }
-window.addEventListener('error', (event) => reportPageError(`${event.message} @ ${event.filename}:${event.lineno}`));
-window.addEventListener('unhandledrejection', (event) => reportPageError(`Promise 失败：${event.reason?.message ?? event.reason}`));
+/**
+ * 断线 ≠ 脚本出错（2026-10-17 现场）：控制台重启时，页面里几个没有 catch 的 await api(...) 会被掐断，
+ * 冒成 unhandledrejection → 红条写「面板脚本错误」，用户以为面板坏了。
+ * 这里先分流：网络类失败只点亮顶部 connPill（「重试中」），真正的脚本异常才进红条。
+ */
+const NETWORK_FAIL_RE = /Failed to fetch|Load failed|NetworkError|network error|fetch failed|ERR_CONNECTION|The operation was aborted/i;
+function reportIfNotNetwork(text) {
+  if (NETWORK_FAIL_RE.test(text)) {
+    setConnOk(false, '控制台没响应（可能刚重启），会自动重试');
+    return false;
+  }
+  reportPageError(text);
+  return true;
+}
+window.addEventListener('error', (event) => {
+  reportIfNotNetwork(`${event.message} @ ${event.filename}:${event.lineno}`);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  reportIfNotNetwork(`Promise 失败：${event.reason?.message ?? event.reason}`);
+});
 
 function api(path, options = {}) {
   const url = path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
@@ -425,6 +478,13 @@ function describeBridge(status) {
       alive: false,
       label: '无快照（宿主没跑）',
       hint: '运行快照由 DSH 宿主里的 QQ助手插件写出，宿主没起来就不会有：先点上面的「启动宿主」。看的是 ' + file,
+    };
+  }
+  if (status?.cwdMismatch === true && status?.bridgeCwd) {
+    return {
+      alive: false,
+      label: '无快照（目录对不上）',
+      hint: '桥把快照写在 ' + status.bridgeCwd + '，控制台却在看 ' + file + ' —— 到「配置」里点「用桥的目录」就一致了',
     };
   }
   return {
@@ -599,6 +659,53 @@ function render(status) {
     document.getElementById('cfgNapcatBat').value = cfg.napcatBat || '';
     document.getElementById('cfgTtsBat').value = cfg.ttsBat || '';
   }
+  renderNapcatPath(status.napcatPath || null);
+  lastStatus = status;
+  renderBridgeCwd(status);
+}
+// 补丁 34：把「现在填了什么 / 文件在不在 / 自动探测到哪」摊开说，别让空白框自己解释。
+function renderNapcatPath(info) {
+  const el = document.getElementById('napcatPathOut');
+  if (!el) return;
+  if (!info) { el.textContent = '（未检测）'; return; }
+  const parts = [];
+  parts.push(info.configured ? ('现在填：' + info.configured) : '现在没填（空）');
+  if (info.configured) parts.push(info.exists ? '✔ 文件存在' : '✘ 文件不存在');
+  if (info.desktop) parts.push('桌面版 exe：启动时按 start 拉起');
+  if (info.detected && info.detected !== info.configured) parts.push('自动探测到：' + info.detected);
+  el.textContent = parts.join('　·　');
+}
+async function detectNapcat() {
+  const r = await api('/api/napcat/detect', { method: 'POST' });
+  renderNapcatPath(r);
+  if (r.ok && r.path) {
+    document.getElementById('cfgNapcatBat').value = r.path;
+    toast('已填入：' + r.path + '（点「保存路径配置」才落盘）');
+  } else {
+    toast('⚠️ ' + (r.reason || '没探测到 NapCat 启动脚本'));
+  }
+}
+/**
+ * 「控制台工作目录」和「桥实际工作目录」对不对得上（2026-10-17 真机：两者不一致时
+ * 面板只说「桥：无快照（插件没加载）」，人猜不到是路径问题，更猜不到能力表全写进了没人读的目录）。
+ */
+function renderBridgeCwd(status) {
+  const hook = document.getElementById('cfgCwdHint');
+  if (!hook) return;
+  const bridge = (status && status.bridgeCwd) || '';
+  if (bridge === '') { hook.textContent = ''; hook.style.color = ''; return; }
+  const mismatch = status.cwdMismatch === true;
+  hook.textContent = mismatch
+    ? '⚠ 桥实际用的是 ' + bridge + ' —— 不一致时快照/日志会读空、能力表会写错目录。点「用桥的目录」对齐。'
+    : '与桥一致：' + bridge;
+  hook.style.color = mismatch ? '#e0a0a0' : '';
+}
+function useBridgeCwd() {
+  const input = document.getElementById('cfgCwd');
+  const bridge = (lastStatus && lastStatus.bridgeCwd) || '';
+  if (!input || bridge === '') return;
+  input.value = bridge;
+  saveConfig();
 }
 async function saveConfig() {
   const result = await api('/api/config', { method: 'POST', body: JSON.stringify({
@@ -616,6 +723,919 @@ function updateErrPill() {
   pill.textContent = `事件：${streamEvents.length}（error ${errors} / warn ${warns}）`;
   pill.className = 'pill ' + (errors > 0 ? 'off' : (warns > 0 ? 'warn' : 'on'));
 }
+// ───────────── 能力开关（补丁 29）：9 张表的结构化编辑 + 原始 JSON 兜底 ─────────────
+// 约定：每张表在 capsDraft[key] 里保留一份「当前草稿」（= 文件解析结果，含未知字段），
+// 结构化控件只改草稿里的已知字段，保存时整表回写 —— 未知字段不会被 UI 吃掉。
+// ───────── 补丁 39：人格表单 12 格 ─────────
+// 顺序与 lib/bridge.js 的 QQ_PERSONA_FIELDS **必须一致**（它决定注入时的排列），
+// 每项：[键名（写进 JSON 的 key）, 中文标签, 一句话说明, 输入框灰色示例, 行数]
+const CAPS_PERSONA_FIELDS = [
+  ['身份', '身份（它是谁）', '一句话交代身份、外形、体型。会原样进提示词，写得像人设卡就行。', '一个住在群里的聊天伙伴：二十五六岁，穿连帽衫，说话像老群友', 2],
+  ['自称', '自称（怎么称呼自己）', '第一人称用哪个词。写错了它会自称「您」「在下」这类客套话。', '我；不用「您」「在下」这类客套称呼', 1],
+  ['性格', '性格（底下是什么人）', '两三个词 + 一句解释，比形容词堆砌管用。', '慢热，熟了话多；被怼会记仇但不翻脸；不主动挑起话题', 2],
+  ['说话风格', '说话风格（怎么开口）', '语速、标点习惯、说话节奏。这条最影响"像不像人"。', '短句为主，常用省略号和「啊」「吧」；偶尔一个表情收尾', 2],
+  ['口头禅', '口头禅（常说的句子）', '它可以整句照搬的台词，写两三句。', '「行吧」「你说得对」「笑死」「这就去」', 2],
+  ['情绪表达', '情绪表达（怎么表现心情）', '表情/动作/语气，而不是心理描写。写「不写内心独白」很关键。', '用一两个表情表示心情，不写括号里的心理活动；被夸就含糊过去', 2],
+  ['喜欢', '喜欢什么', '人、事、话题。它会更愿意聊这些。', '安静的群、有人认真问的问题、深夜随口聊两句', 1],
+  ['讨厌', '讨厌什么', '踩到就会炸毛的点，写清反应更好。', '被当成查询工具；同一件事被反复追问；被人当枪使', 2],
+  ['禁忌', '禁忌（绝对不能做）', '硬红线，优先级最高。称呼规则一定写这儿。', '不主动打探隐私；不替任何人下结论、不站队', 2],
+  ['边界', '边界（不做的事）', '不打探隐私、不说教、不主动索取之类。', '不写内心独白；不打探隐私；不说教；被要求总结才分点', 2],
+  ['称呼群友', '称呼规则（谁叫什么）', '按身份或 QQ 号写清谁怎么叫（群主/管理员/普通群友）。写错会认错人。', '群主 →「老板」；其他人 → 昵称，没有昵称就叫「你」', 2],
+  ['回复长度', '回复长度（说多少）', '日常聊天的默认长度；例外情况也写这儿。', '默认一两句；只有被要求总结/列举时才分点', 1],
+]
+
+const CAPS_FIELDS = {
+  replyStyle: [
+    ['maxParts', '最多拆几条', 'number'],
+    ['delayMs', '气泡间隔（毫秒）', 'number'],
+  ],
+  sim: [
+    ['probeMin', '试探门槛（条）', 'number'],
+    ['activeMin', '活跃门槛（条）', 'number'],
+    ['windowMs', '统计窗口（毫秒）', 'number'],
+    ['probeChance', '试探概率（0-1）', 'number'],
+    ['activeChance', '活跃概率（0-1）', 'number'],
+    ['cooldownMs', '冷却（毫秒）', 'number'],
+    ['restWindowMs', '退场窗口（毫秒）', 'number'],
+    ['maxJoins', '每窗最多插话', 'number'],
+  ],
+  autonomy: [
+    ['chats', '聊天名单（一行一个：g:群号 / u:QQ / 会话键）', 'lines'],
+    ['maxPerHour', '每小时最多主动发', 'number'],
+    ['minGapMs', '两条之间至少（毫秒）', 'number'],
+    ['maxRead', '一次最多读几条未读', 'number'],
+    ['quietHours', '静默时段（如 23:30-08:00）', 'text'],
+  ],
+  closed: [
+    ['chats', '名单（一行一个；留空 = 全部聊天）', 'lines'],
+    ['identity', '它在群里怎么称呼自己', 'text'],
+    ['note', '补充口径（可选）', 'text'],
+    ['denyCaps', '同时关掉全部能力（画图 / 识图 / 知识库…）', 'bool'],
+  ],
+  persona: [
+    ['mode', 'mode（追加 / 覆盖）', 'text', { options: ['append', 'replace'] }],
+    ['fields', '12 个人格字段（一格填一项，留空=不注入）', 'fields'],
+    ['extra', '补充描述（一行一句）', 'lines'],
+    ['rules', '硬规则（一行一条）', 'lines'],
+  ],
+};
+// ───────── 补丁 33：字段说明 / 单位换算 / 预设（点一下把整组数字填好，不用记毫秒） ─────────
+// 为什么单独一张表：CAPS_FIELDS 只该管"画什么控件"，说明文字与推荐值放这儿，
+// 以后加字段不用动渲染逻辑。
+//   CAPS_HINTS['表名.字段'] = { hint: 一句话说明（显示在输入框下面）, example: 输入框灰色示例 }
+//   CAPS_UNITS['表名.字段'] = 'ms' → 输入框右边实时换算成"≈ 5 分钟"
+//   CAPS_PRESETS[表名]      = [{ name, values }] → 一组预设按钮，点一下把整组数字填好
+// ───────────── 补丁 35：每张表「打开 / 关掉意味着什么」的一句话说明 ─────────────
+// 后四张表的 enabled 语义和前五张不一样：关掉 = 这张表不生效 = 回到默认（能力全开、用宿主默认模型、
+// 工具全放行、不审计），不是"全部关"。这句话不写清楚，用户拨开关就是在猜。
+const CAPS_TABLE_NOTE = {
+  replyStyle: '打开 = 按下面的规则拆条 / 静默；关掉或删表 = 一次把整段话发出去。',
+  persona: '打开 = 用下面的 12 个字段拼人格注入；关掉 = 只用人设文件（qq-persona.txt）。',
+  sim: '打开 = 按门槛决定"要不要插话"；关掉 = 永远不主动开口（被 @ 或点名照常回）。',
+  autonomy: '打开 = 它自己读未读、自己决定说不说；关掉 = 只在你叫它时说话。名单留空 = 谁都不生效。',
+  closed: '打开 = 名单里的聊天按"封闭口径"回答且能力全关；名单留空 = 所有聊天都封闭。',
+  capabilities: '打开 = 按下面的开关放行/关闭能力；关掉这张表 = 回到默认（六个能力全开）。DSH 设置页的五个总开关设成 false 可以强制关，这里开着也没用。',
+  models: '打开 = 按会话键换模型；关掉 = 所有聊天都用宿主默认模型。键写 g:群号 / u:QQ / g:群号:u:QQ。',
+  tools: '打开 = 按 allow / deny 放行工具（allow 优先，只写 allow 就是"只给这几个"）；关掉 = 全部工具都可用。',
+  audit: '打开 = 出站文本先过规则（只记录或直接拦下）；关掉 = 不检查也不记账。',
+};
+const CAPS_HINTS = {
+  'replyStyle.maxParts': { hint: '一句话最多拆成几条气泡（2-8）。1 = 不拆，整段一次发。', example: '2' },
+  'replyStyle.delayMs': { hint: '两条气泡之间等多久。太快像刷屏，太慢像断线。', example: '600' },
+  'sim.probeMin': { hint: '最近这个窗口里够多少条消息才"试探性插一句"。', example: '8' },
+  'sim.activeMin': { hint: '够多少条才"放心接话"。一般写成试探门槛的 2 倍。', example: '16' },
+  'sim.windowMs': { hint: '统计"多热闹"的时间窗口。300000 = 最近 5 分钟。', example: '300000' },
+  'sim.probeChance': { hint: '满足试探门槛后，真有百分之多少的概率开口。0.15 = 15%。', example: '0.15' },
+  'sim.activeChance': { hint: '满足活跃门槛后的开口概率。0.3 = 30%。', example: '0.3' },
+  'sim.cooldownMs': { hint: '两次主动插话之间至少隔多久。180000 = 3 分钟。', example: '180000' },
+  'sim.restWindowMs': { hint: '连续活跃多久后进入"退场"休息。1800000 = 30 分钟。', example: '1800000' },
+  'sim.maxJoins': { hint: '一个窗口里最多主动插几次话。', example: '2' },
+  'autonomy.chats': { hint: '只对这些聊天生效，一行一个：g:群号（整群）/ u:QQ号（私聊）/ g:群号:u:QQ（群内某人）。', example: 'g:123456789' },
+  'autonomy.maxPerHour': { hint: '每小时最多主动说几句，防止它自己刷屏。', example: '4' },
+  'autonomy.minGapMs': { hint: '两条主动发言之间至少隔多久。480000 = 8 分钟。', example: '480000' },
+  'autonomy.maxRead': { hint: '一轮最多读几条未读再决定说不说。读太多会拖慢回复。', example: '50' },
+  'autonomy.quietHours': { hint: '这段时间里绝不主动开口。格式 23:30-08:00，可以留空。', example: '23:30-08:00' },
+  'closed.chats': { hint: '这些聊天按"封闭口径"回答；留空 = 所有聊天都封闭。', example: 'g:123456789' },
+  'closed.identity': { hint: '它在封闭聊天里怎么称呼自己（比如"内部助手"）。', example: '内部助手' },
+  'closed.note': { hint: '额外一句口径约束，可留空。', example: '只谈工作，不谈别的' },
+  'closed.denyCaps': { hint: '打开后：这些聊天里画图 / 识图 / 知识库等能力一律当作关闭。' },
+  'persona.mode': { hint: 'append = 追加在默认人格后面；replace = 完全替换默认人格。', example: 'append' },
+  'persona.fields': { hint: '下面 12 格对应注入时的固定顺序；只会写「非空」的那些，留空就等于没设。想整体替换原人设，把上面的 mode 设成 replace。' },
+  'persona.extra': { hint: '补充描述，一行一句，会一起拼进系统提示。', example: '不喜欢被叫亲' },
+  'persona.rules': { hint: '硬规则，一行一条，模型必须遵守。', example: '不主动要联系方式' },
+};
+const CAPS_UNITS = {
+  'replyStyle.delayMs': 'ms',
+  'sim.windowMs': 'ms',
+  'sim.cooldownMs': 'ms',
+  'sim.restWindowMs': 'ms',
+  'sim.probeChance': 'pct',
+  'sim.activeChance': 'pct',
+  'autonomy.minGapMs': 'ms',
+};
+const CAPS_PRESETS = {
+  replyStyle: [
+    { name: '一整段（不拆）', values: { maxParts: 1, delayMs: 0 } },
+    { name: '拆 2 条（推荐）', values: { maxParts: 2, delayMs: 600 } },
+    { name: '拆 4 条（吐槽流）', values: { maxParts: 4, delayMs: 900 } },
+  ],
+  sim: [
+    { name: '安静群', values: { probeMin: 20, activeMin: 40, windowMs: 600000, probeChance: 0.05, activeChance: 0.1, cooldownMs: 600000, restWindowMs: 3600000, maxJoins: 1 } },
+    { name: '普通群（推荐）', values: { probeMin: 8, activeMin: 16, windowMs: 300000, probeChance: 0.15, activeChance: 0.3, cooldownMs: 180000, restWindowMs: 1800000, maxJoins: 2 } },
+    { name: '热闹群', values: { probeMin: 3, activeMin: 6, windowMs: 120000, probeChance: 0.3, activeChance: 0.5, cooldownMs: 60000, restWindowMs: 900000, maxJoins: 3 } },
+  ],
+  autonomy: [
+    { name: '保守：每小时 2 条 / 隔 15 分钟', values: { maxPerHour: 2, minGapMs: 900000, maxRead: 20 } },
+    { name: '正常：每小时 4 条 / 隔 8 分钟', values: { maxPerHour: 4, minGapMs: 480000, maxRead: 50 } },
+    { name: '活跃：每小时 8 条 / 隔 3 分钟', values: { maxPerHour: 8, minGapMs: 180000, maxRead: 100 } },
+  ],
+};
+
+/** 毫秒 / 比例 → 人话（300000 → "= 5 分钟"；0.15 → "= 15%"）。不是这两种就返回空串。 */
+function capsPeekText(key, field, value) {
+  const unit = CAPS_UNITS[key + '.' + field] ?? '';
+  if (value === null || value === undefined || value === '' || Number.isFinite(Number(value)) === false) return '';
+  const num = Number(value);
+  if (unit === 'pct') return '= ' + Math.round(num * 1000) / 10 + '%';
+  if (unit !== 'ms') return '';
+  if (num === 0) return '= 不等待';
+  if (num < 1000) return '= ' + num + ' 毫秒';
+  const sec = num / 1000;
+  if (sec < 90) return '= ' + Math.round(sec * 10) / 10 + ' 秒';
+  const min = sec / 60;
+  if (min < 90) return '= ' + Math.round(min * 10) / 10 + ' 分钟';
+  return '= ' + Math.round(min / 60 * 10) / 10 + ' 小时';
+}
+
+/** 字段那一行灰字的统一入口：hint（说明）+ example（灰色示例）。 */
+function capsFieldHint(key, field) {
+  const spec = CAPS_HINTS[key + '.' + field] ?? {};
+  return { hint: spec.hint ?? '', example: spec.example ?? '' };
+}
+
+/** 输入数字时实时把"≈ 5 分钟"写回右边（oninput，不触发重绘，输入框不会丢焦点）。 */
+function capsNumPeek(key, field, text) {
+  const el = document.getElementById('caps-' + key + '-' + field + '-peek');
+  if (el === null) return;
+  const peek = capsPeekText(key, field, text);
+  el.textContent = peek === '' ? ' ' : ' ' + peek;
+}
+
+/** 预设按钮行：点一下把这组数值写进草稿并重绘（整组一起，不会只改一半）。 */
+function capsPresetRow(key) {
+  const presets = CAPS_PRESETS[key] ?? [];
+  if (presets.length === 0) return '';
+  const buttons = presets.map((preset, index) =>
+    '<button onclick="capsApplyPreset(\'' + key + '\',' + index + ')">' + capsEsc(preset.name) + '</button>').join(' ');
+  return '<div class="row" style="margin:2px 0 8px"><span class="meta">一键预设：</span>' + buttons + '</div>';
+}
+
+function capsApplyPreset(key, index) {
+  const preset = (CAPS_PRESETS[key] ?? [])[index];
+  if (preset === undefined) return;
+  const draft = capsDraft[key];
+  if (draft === undefined) return;
+  for (const [field, value] of Object.entries(preset.values)) draft[field] = value;
+  renderCaps();
+  toast('已填入预设：' + preset.name + '（还要点这张表的「保存」才落盘）');
+}
+const capsDraft = {};
+let capsData = null;
+const capsOpen = {};
+
+function capsBadge(t) {
+  if (t.error !== '' && t.exists === true) return '<span class="badge bad">坏 JSON</span>';
+  if (t.exists === false) return '<span class="badge">未配置（=关）</span>';
+  if (t.enabled === true) return '<span class="badge ok">开</span>';
+  return '<span class="badge">关</span>';
+}
+
+async function loadCaps() {
+  const state = document.getElementById('capsState');
+  state.textContent = '加载中…';
+  try {
+    const data = await api('/api/qq-caps');
+    if (data.ok !== true) { state.textContent = data.reason || '读取失败'; return; }
+    capsData = data;
+    for (const [key, table] of Object.entries(data.tables)) {
+      capsDraft[key] = table.json !== null && typeof table.json === 'object' && Array.isArray(table.json) === false ? JSON.parse(JSON.stringify(table.json)) : {};
+      if (capsOpen[key] === undefined) capsOpen[key] = table.enabled === true;
+    }
+    await loadCapsCands();
+    await loadPersona();
+    renderCaps();
+    state.textContent = '工作目录：' + (data.cwd || '（未配置）') + ' · ' + Object.keys(data.tables).length + ' 张表';
+  } catch (error) {
+    state.textContent = '读取失败：' + error.message;
+  }
+}
+
+function capsField(key, spec, draft) {
+  const [field, label, kind] = spec;
+  const value = draft[field];
+  const id = 'caps-' + key + '-' + field;
+  if (kind === 'bool') {
+    return '<label class="meta" style="display:block;margin:4px 0"><input type="checkbox" id="' + id + '"'
+      + (value === true ? ' checked' : '') + ' onchange="capsSet(\'' + key + '\',\'' + field + '\',this.checked)"> ' + label + '</label>';
+  }
+  if (kind === 'lines') {
+    const text = Array.isArray(value) ? value.join('\n') : '';
+    const info = capsFieldHint(key, field);
+    return '<div class="meta" style="margin:4px 0">' + label + '</div>'
+      + '<textarea id="' + id + '" rows="3" style="width:100%" placeholder="' + capsEsc(info.example) + '" onchange="capsSet(\'' + key + '\',\'' + field + '\',capsLines(this.value))">' + capsEsc(text) + '</textarea>'
+      + (info.hint === '' ? '' : '<div class="meta" style="margin:2px 0 6px">' + capsEsc(info.hint) + '</div>');
+  }
+  if (kind === 'fields') {
+    // 12 个键各给一格：上面中文名、下面一句说明、框里是灰色示例；留空 = 该键不写进 JSON。
+    const table = value !== null && typeof value === 'object' && Array.isArray(value) === false ? value : {};
+    return CAPS_PERSONA_FIELDS.map((item) => {
+      const [name, title, hint, example, rows] = item;
+      const cellId = id + '-' + name;
+      const current = typeof table[name] === 'string' ? table[name] : '';
+      const box = rows > 1
+        ? '<textarea id="' + cellId + '" rows="' + rows + '" style="width:100%" placeholder="' + capsEsc(example) + '" onchange="capsSetField(\'' + key + '\',\'' + field + '\',\'' + name + '\',this.value)">' + capsEsc(current) + '</textarea>'
+        : '<input type="text" id="' + cellId + '" style="width:100%" placeholder="' + capsEsc(example) + '" value="' + capsEsc(current) + '" onchange="capsSetField(\'' + key + '\',\'' + field + '\',\'' + name + '\',this.value)">';
+      return '<div style="margin:6px 0"><div class="meta" style="color:#c9cfd8">' + capsEsc(title) + '</div>'
+        + box
+        + '<div class="meta" style="margin-top:2px">' + capsEsc(hint) + '</div></div>';
+    }).join('');
+  }
+  if (kind === 'map') {
+    const text = value !== null && typeof value === 'object' && Array.isArray(value) === false
+      ? Object.entries(value).map(([k, v]) => k + ': ' + v).join('\n')
+      : '';
+    const info = capsFieldHint(key, field);
+    return '<div class="meta" style="margin:4px 0">' + label + '</div>'
+      + '<textarea id="' + id + '" rows="6" style="width:100%" placeholder="' + capsEsc(info.example) + '" onchange="capsSetMap(\'' + key + '\',\'' + field + '\',this.value)">' + capsEsc(text) + '</textarea>'
+      + (info.hint === '' ? '' : '<div class="meta" style="margin:2px 0 6px">' + capsEsc(info.hint) + '</div>');
+  }
+  if (kind === 'number') {
+    const info = capsFieldHint(key, field);
+    const peek = capsPeekText(key, field, value);
+    return '<label class="meta" style="display:inline-block;margin:4px 14px 8px 0;vertical-align:top">' + label
+      + '<br><input type="number" id="' + id + '" style="width:120px" value="' + (typeof value === 'number' ? value : '') + '" oninput="capsNumPeek(\'' + key + '\',\'' + field + '\',this.value)" onchange="capsSet(\'' + key + '\',\'' + field + '\',this.value === \'\' ? null : Number(this.value))">'
+      + '<span class="meta" id="' + id + '-peek">' + (peek === '' ? ' ' : ' ' + peek) + '</span>'
+      + (info.hint === '' ? '' : '<div class="meta" style="max-width:260px;margin-top:2px">' + capsEsc(info.hint) + '</div>')
+      + '</label>';
+  }
+  const info = capsFieldHint(key, field);
+  const options = spec.length > 3 && spec[3] !== null && typeof spec[3] === 'object' && Array.isArray(spec[3].options) ? spec[3].options : null;
+  if (options !== null) {
+    const picked = value === undefined || value === null ? '' : String(value);
+    const opts = ['<option value="">（未设置）</option>'].concat(options.map((opt) =>
+      '<option value="' + capsEsc(opt) + '"' + (picked === String(opt) ? ' selected' : '') + '>' + capsEsc(opt) + '</option>')).join('');
+    return '<label class="meta" style="display:inline-block;margin:4px 14px 8px 0;vertical-align:top">' + label
+      + '<br><select id="' + id + '" onchange="capsSet(\'' + key + '\',\'' + field + '\',this.value)">' + opts + '</select>'
+      + (info.hint === '' ? '' : '<div class="meta" style="max-width:260px;margin-top:2px">' + capsEsc(info.hint) + '</div>')
+      + '</label>';
+  }
+  return '<label class="meta" style="display:inline-block;margin:4px 14px 8px 0;vertical-align:top">' + label
+    + '<br><input type="text" id="' + id + '" style="width:240px" placeholder="' + capsEsc(info.example) + '" value="' + capsEsc(value === undefined || value === null ? '' : String(value)) + '" onchange="capsSet(\'' + key + '\',\'' + field + '\',this.value)">'
+    + (info.hint === '' ? '' : '<div class="meta" style="max-width:260px;margin-top:2px">' + capsEsc(info.hint) + '</div>')
+    + '</label>';
+}
+
+function capsEsc(text) {
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 多行文本 → 数组（去空行、去首尾空白）。 */
+function capsLines(text) {
+  return String(text).split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
+}
+
+function capsSet(key, field, value) {
+  const draft = capsDraft[key];
+  if (value === null || value === undefined || value === '') delete draft[field];
+  else draft[field] = value;
+  renderCaps();
+}
+
+function capsSetMap(key, field, text) {
+  const draft = capsDraft[key];
+  const out = {};
+  for (const line of String(text).split(/\r?\n/)) {
+    const at = line.indexOf(':');
+    if (at <= 0) continue;
+    const name = line.slice(0, at).trim();
+    const val = line.slice(at + 1).trim();
+    if (name !== '') out[name] = val;
+  }
+  draft[field] = out;
+  renderCaps();
+}
+
+/** 人格单格写入：留空就删掉这个键，免得把空字符串注入提示词。 */
+function capsSetField(key, field, name, value) {
+  const draft = capsDraft[key];
+  const table = draft[field] !== null && typeof draft[field] === 'object' && Array.isArray(draft[field]) === false ? draft[field] : {};
+  const text = String(value == null ? '' : value).trim();
+  if (text === '') delete table[name];
+  else table[name] = text;
+  draft[field] = table;
+  renderCaps();
+}
+
+function capsRawChange(key, text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('必须是一个 JSON 对象');
+    capsDraft[key] = parsed;
+    renderCaps();
+  } catch (error) {
+    toast('原始 JSON 有错：' + error.message);
+  }
+}
+
+function capsBlock(t) {
+  const draft = capsDraft[t.key] ?? {};
+  const fields = CAPS_FIELDS[t.key] ?? [];
+  const badge = capsBadge(t);
+  const danger = t.danger === true ? '<span class="meta">（危险开关：打开要在输入框里打「确认」）</span>' : '';
+  const head = '<div style="display:flex;align-items:center;gap:10px;margin-top:10px">'
+    + '<b style="color:#d6dae2">' + capsEsc(t.label) + '</b>' + badge
+    + '<span class="meta">' + capsEsc(t.file || '（无 cwd）') + '</span>'
+    + '<button onclick="capsOpen[\'' + t.key + '\']=!capsOpen[\'' + t.key + '\'];renderCaps()">' + (capsOpen[t.key] ? '收起' : '展开') + '</button>'
+    + '<button onclick="capsToggle(\'' + t.key + '\',' + (t.enabled === true ? 'false' : 'true') + ')">' + (t.enabled === true ? '关掉' : '打开') + '</button>'
+    + '<button onclick="capsSave(\'' + t.key + '\')">保存</button>'
+    + '<button onclick="capsReset(\'' + t.key + '\')">删除表（=关）</button>'
+    + danger
+    + '</div>';
+  if (t.error !== '') {
+    return head + '<div class="meta" style="color:#e0a0a0">' + capsEsc(t.error) + '</div>';
+  }
+  const note = CAPS_TABLE_NOTE[t.key]
+    ? '<div class="meta" style="margin:4px 0 0 4px">' + capsEsc(CAPS_TABLE_NOTE[t.key]) + '</div>'
+    : '';
+  if (capsOpen[t.key] !== true) return head + note;
+  const structured = capsStructured(t);
+  const raw = '<details style="margin-top:6px"><summary class="meta">原始 JSON（改完按 Ctrl+Enter 或点这里外面生效）</summary>'
+    + '<textarea rows="8" style="width:100%;font-family:monospace" id="caps-raw-' + t.key + '" onchange="capsRawChange(\'' + t.key + '\',this.value)">'
+    + capsEsc(JSON.stringify(draft, null, 2)) + '</textarea></details>';
+  const confirmBox = t.danger === true
+    ? '<input type="text" id="caps-confirm-' + t.key + '" placeholder="打开时在这里打：确认" style="width:200px;margin-left:8px">'
+    : '';
+  return head + note + '<div style="margin:6px 0 0 4px">' + structured + raw + confirmBox + '</div>';
+}
+
+let personaData = null;
+let personaDraftText = null;
+
+async function loadPersona() {
+  try {
+    const data = await api('/api/persona');
+    personaData = data;
+    personaDraftText = typeof data.text === 'string' ? data.text : '';
+  } catch (error) {
+    personaData = { ok: false, reason: error.message, exists: false, chars: 0 };
+    personaDraftText = '';
+  }
+}
+
+function personaCount(el) {
+  personaDraftText = el.value;
+  const badge = document.getElementById('persona-count');
+  if (badge !== null) badge.textContent = el.value.trim().length + ' 字';
+}
+
+function personaBlock() {
+  if (personaData === null) return '';
+  const text = personaDraftText === null ? '' : personaDraftText;
+  const badge = personaData.ok === false ? '<span class="badge bad">读不到</span>' : (personaData.exists === true ? '<span class="badge ok">在盘</span>' : '<span class="badge">文件不存在</span>');
+  const meta = personaData.ok === false
+    ? personaData.reason
+    : personaData.file + (personaData.exists === true ? ' · 生效 ' + personaData.chars + ' 字 / ' + personaData.bytes + ' 字节' : ' · 尚未创建');
+  return '<div style="margin-top:10px">'
+    + '<div style="display:flex;align-items:center;gap:10px"><b style="color:#d6dae2">人设正文（qq-persona.txt）</b>' + badge
+    + '<span class="meta">' + capsEsc(meta) + '</span></div>'
+    + '<textarea id="persona-text" rows="10" style="width:100%;font-family:inherit" placeholder="这里写人设正文；空正文等于没有人设" oninput="personaCount(this)">' + capsEsc(text) + '</textarea>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
+    + '<button onclick="personaSave()">保存正文</button>'
+    + '<button onclick="personaRevert()">撤销改动</button>'
+    + '<span class="meta" id="persona-count">' + text.trim().length + ' 字</span>'
+    + '<span class="meta">保存后要重启 dsh web 才生效（桥那边是模块常量）；旧正文自动留一份 qq-persona.txt.bak。</span>'
+    + '</div></div>';
+}
+
+async function personaSave() {
+  const text = personaDraftText === null ? '' : personaDraftText;
+  const result = await api('/api/persona', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+  toast(result.ok === true ? result.reason : '失败：' + result.reason);
+  await loadPersona();
+  renderCaps();
+}
+
+function personaRevert() {
+  personaDraftText = personaData !== null && typeof personaData.text === 'string' ? personaData.text : '';
+  renderCaps();
+}
+
+function renderCaps() {
+  const out = document.getElementById('capsOut');
+  if (capsData === null) return;
+  out.classList.remove('meta');
+  out.innerHTML = personaBlock() + '<hr style="border:0;border-top:1px solid #2a2f3a;margin:10px 0">' + Object.values(capsData.tables).map(capsBlock).join('<hr style="border:0;border-top:1px solid #2a2f3a;margin:10px 0">') + capsKeyList();
+}
+
+function capsCollapseAll(closed) {
+  if (capsData === null) return;
+  for (const key of Object.keys(capsData.tables)) capsOpen[key] = !closed;
+  renderCaps();
+}
+
+function capsConfirm(key) {
+  const el = document.getElementById('caps-confirm-' + key);
+  return el === null ? '' : el.value.trim();
+}
+
+async function capsToggle(key, enabled) {
+  const body = { table: key, action: 'toggle', enabled, confirm: capsConfirm(key) };
+  const result = await api('/api/qq-caps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  toast(result.ok === true ? result.reason : '失败：' + result.reason);
+  await loadCaps();
+}
+
+async function capsSave(key) {
+  const body = { table: key, action: 'save', json: capsDraft[key], confirm: capsConfirm(key) };
+  const result = await api('/api/qq-caps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  toast(result.ok === true ? result.reason : '失败：' + result.reason);
+  await loadCaps();
+}
+
+async function capsReset(key) {
+  if (confirm('删除这张表就等于关掉它（文件里的配置会一起消失）。确定？') !== true) return;
+  const body = { table: key, action: 'reset' };
+  const result = await api('/api/qq-caps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  toast(result.ok === true ? result.reason : '失败：' + result.reason);
+  await loadCaps();
+}
+
+// ───────── 补丁 33 第二批：能力勾选 / 模型映射 / 工具白名单 / 出站审计 从「原始 JSON」升级成表单 ─────────
+// 分工：CAPS_FIELDS 那套字段控件继续管 replyStyle / persona / sim / autonomy / closed；
+// 这四张表结构比较深（default / chats / rules），用行编辑器更合适，所以单独写。
+// 约定没变：所有控件只改 capsDraft[key]，点这张表的「保存」才整表落盘；原始 JSON 入口仍然保留。
+
+// 能力清单与 lib/bridge.js:27 的 QQ_CAPABILITIES 一一对应（改那边记得同步这里）。
+const CAPS_CAP_DEFS = [
+  ['vision', '看图', '关掉后它看不到群里的图，收到图只会说看不懂'],
+  ['search', '以图搜图', '关掉后不会去百度识图找图片出处'],
+  ['draw', '画图', '关掉后不能出图（最常关的一个）'],
+  ['kb', '知识库', '关掉后不查本地知识库'],
+  ['files', '群文件', '关掉后不读群文件 / 相册'],
+  ['media', '发图 / 发语音', '关掉后只发文字'],
+  ['web', '联网（提示级）', '只在提示词里提醒模型不要联网，不真正禁用宿主能力'],
+  ['thinking', '深思（提示级）', '同上：提示级，不是真禁用'],
+];
+
+// 候选数据：群号 / 会话键来自 /api/groups，工具名来自 /api/qq-tools。取不到就退回手填。
+let capsCands = { keys: [], tools: [] };
+
+async function loadCapsCands() {
+  const keys = [];
+  const tools = [];
+  try {
+    const groups = await api('/api/groups');
+    for (const item of Array.isArray(groups.groups) ? groups.groups : []) {
+      const raw = String(item.groupId ?? item.id ?? item.key ?? item.name ?? '').trim();
+      if (raw === '') continue;
+      keys.push(raw.startsWith('g:') ? raw : 'g:' + raw);
+    }
+  } catch {
+    /* 群列表取不到不算错：NapCat 没连的时候本来就没有 */
+  }
+  try {
+    const catalog = await api('/api/qq-tools');
+    for (const item of Array.isArray(catalog.tools) ? catalog.tools : []) {
+      const name = String(item.name ?? '').trim();
+      if (name !== '') tools.push(name);
+    }
+  } catch {
+    /* 同上 */
+  }
+  capsCands = { keys, tools };
+}
+
+/** 群号 / 会话键的候选下拉：点一下就能选，选不到还能直接手打 g:群号。 */
+function capsKeyList() {
+  return '<datalist id="caps-keys">'
+    + capsCands.keys.map((key) => '<option value="' + capsEsc(key) + '"></option>').join('')
+    + '</datalist>';
+}
+
+/** 把任意文本塞进单引号 JS 字符串里（键名里可能有反斜杠，不能直接拼）。 */
+function capsJs(text) {
+  return String(text).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function capsObj(value) {
+  return value !== null && typeof value === 'object' && Array.isArray(value) === false ? value : {};
+}
+
+/** 每张深结构表的最小骨架：capabilities → default/chats，models/tools → default/chats，audit → rules。 */
+function capsNormDraft(key) {
+  const draft = capsDraft[key];
+  if (draft === undefined) return {};
+  if (key === 'capabilities') {
+    draft.default = capsObj(draft.default);
+    draft.chats = capsObj(draft.chats);
+  }
+  if (key === 'models' || key === 'tools') {
+    draft.default = capsObj(draft.default);
+    draft.chats = capsObj(draft.chats);
+  }
+  if (key === 'audit') {
+    draft.rules = Array.isArray(draft.rules) ? draft.rules : [];
+  }
+  return draft;
+}
+
+/** 会话键输入框：带候选下拉 + 改完重命名草稿里的键。 */
+function capsKeyCell(key, scope, value) {
+  return '<td><input type="text" list="caps-keys" style="width:190px" placeholder="g:群号 / u:QQ号" value="'
+    + capsEsc(value) + '" onchange="capsChatRename(\'' + key + '\',\'' + scope + '\',\'' + capsJs(value) + '\',this.value)"></td>';
+}
+
+/** 加一行：先给个占位键，改名字时自动重命名（不会因为键重复把上一行覆盖掉）。 */
+function capsChatAdd(key) {
+  const draft = capsNormDraft(key);
+  draft.chats = capsObj(draft.chats);
+  let index = 1;
+  let name = 'g:新会话';
+  while (draft.chats[name] !== undefined) { index += 1; name = 'g:新会话' + index; }
+  draft.chats[name] = {};
+  renderCaps();
+  toast('加了一行「' + name + '」：把会话键改成真的群号 / QQ 号，再点保存');
+}
+
+function capsChatDel(key, scope) {
+  const draft = capsNormDraft(key);
+  if (scope === 'default') delete draft.default;
+  else delete capsObj(draft.chats)[scope];
+  renderCaps();
+}
+
+function capsChatRename(key, scope, oldKey, newKey) {
+  const draft = capsNormDraft(key);
+  const next = String(newKey).trim();
+  if (next === '' || next === oldKey) { renderCaps(); return; }
+  if (scope !== 'default') {
+    const chats = capsObj(draft.chats);
+    if (chats[next] !== undefined && next !== oldKey) { toast('已经有「' + next + '」这一行了'); renderCaps(); return; }
+    chats[next] = chats[oldKey] ?? {};
+    delete chats[oldKey];
+  }
+  renderCaps();
+}
+
+// ── 表 1：能力勾选（8 个开关 + 每群/每人覆盖） ──
+function capsCapDefault(name, on) {
+  const draft = capsNormDraft('capabilities');
+  if (on === true) delete draft.default[name];
+  else draft.default[name] = false;
+  renderCaps();
+}
+
+function capsCapAll(setOn) {
+  const draft = capsNormDraft('capabilities');
+  for (const [name] of CAPS_CAP_DEFS) {
+    if (setOn === true) delete draft.default[name];
+    else draft.default[name] = false;
+  }
+  renderCaps();
+  toast(setOn === true ? '默认层已全开（还要点保存）' : '默认层已全关（还要点保存）');
+}
+
+function capsCapChatOff(chatKey, select) {
+  const draft = capsNormDraft('capabilities');
+  const entry = capsObj(draft.chats[chatKey]);
+  const off = Array.from(select.selectedOptions).map((opt) => opt.value);
+  for (const [name] of CAPS_CAP_DEFS) {
+    if (off.includes(name)) entry[name] = false;
+    else delete entry[name];
+  }
+  draft.chats[chatKey] = entry;
+}
+
+function capsCapabilities(t) {
+  const draft = capsNormDraft('capabilities');
+  const def = draft.default;
+  const rows = CAPS_CAP_DEFS.map(([name, label, effect]) => {
+    const on = def[name] !== false;
+    return '<tr><td style="white-space:nowrap"><label><input type="checkbox"' + (on ? ' checked' : '')
+      + ' onchange="capsCapDefault(\'' + name + '\',this.checked)"> ' + capsEsc(label) + '</label></td>'
+      + '<td class="meta">' + capsEsc(effect) + '</td></tr>';
+  }).join('');
+  const chats = Object.keys(capsObj(draft.chats));
+  const chatRows = chats.map((chatKey) => {
+    const entry = capsObj(draft.chats[chatKey]);
+    const off = CAPS_CAP_DEFS.filter(([name]) => entry[name] === false).map(([name]) => name);
+    const opts = CAPS_CAP_DEFS.map(([name, label]) => '<option value="' + name + '"'
+      + (off.includes(name) ? ' selected' : '') + '>' + capsEsc(label) + '</option>').join('');
+    return '<tr>' + capsKeyCell('capabilities', chatKey, chatKey)
+      + '<td><select multiple size="3" style="width:100%" onchange="capsCapChatOff(\'' + capsJs(chatKey) + '\',this)">' + opts + '</select>'
+      + '<div class="meta">选中的 = 这个聊天里关掉的能力</div></td>'
+      + '<td><button class="danger" onclick="capsChatDel(\'capabilities\',\'' + capsJs(chatKey) + '\')">删</button></td></tr>';
+  }).join('');
+  return '<div class="row"><button onclick="capsCapAll(true)">全开</button><button onclick="capsCapAll(false)">全关</button>'
+    + '<span class="meta">没勾 = 开着；勾掉哪个就关哪个</span></div>'
+    + '<table><thead><tr><th style="width:150px">能力</th><th>关掉会怎样</th></tr></thead><tbody>' + rows + '</tbody></table>'
+    + '<div class="row" style="margin-top:10px"><b style="color:#d6dae2">按群 / 按人单独关</b>'
+    + '<span class="meta">（不填就跑上面的默认层）</span><button onclick="capsChatAdd(\'capabilities\')">加一行</button></div>'
+    + (chatRows === '' ? '<div class="meta">（还没单独设置，所有聊天都按默认层）</div>'
+      : '<table><thead><tr><th style="width:200px">会话键</th><th>这个聊天里关掉</th><th></th></tr></thead><tbody>' + chatRows + '</tbody></table>')
+    + '<details style="margin-top:6px"><summary class="meta">这张表怎么写（点开看形状）</summary><pre>'
+    + capsEsc('{\n  "enabled": true,\n  "default": { "draw": false },\n  "chats": { "g:123456789": { "draw": false, "web": false } }\n}')
+    + '</pre></details>'
+    + '<div class="meta" style="margin-top:6px;color:#e0c080">生效时机分两段：<b>口径</b>（提示词里告诉模型「这项能力关了」）下一轮就变；<b>工具</b>要等会话重建——关完在对应聊天里对机器人发 <code>/new</code>，工具才真的从这份会话消失。旧会话不会自动重建。</div>';
+}
+
+// ── 表 2：每群 / 每人模型映射 ──
+function capsModelCell(scope, col, value) {
+  return '<td><input type="text" style="width:100%" placeholder="' + (col === 'model' ? 'deepseek-chat' : (col === 'provider' ? 'deepseek' : '可选')) + '" value="'
+    + capsEsc(value === undefined || value === null ? '' : String(value)) + '" onchange="capsModelSet(\'' + capsJs(scope) + '\',\'' + col + '\',this.value)"></td>';
+}
+
+function capsModelRow(scope, entry) {
+  const label = scope === 'default' ? '<span class="meta">（兜底：其它聊天都用这个）</span>'
+    : capsKeyCell('models', scope, scope);
+  return '<tr><td style="width:210px">' + label + '</td>'
+    + capsModelCell(scope, 'provider', entry.provider)
+    + capsModelCell(scope, 'model', entry.model)
+    + capsModelCell(scope, 'reasoningEffort', entry.reasoningEffort)
+    + '<td>' + (scope === 'default' ? '' : '<button class="danger" onclick="capsChatDel(\'models\',\'' + capsJs(scope) + '\')">删</button>') + '</td></tr>';
+}
+
+function capsModelSet(scope, col, value) {
+  const draft = capsNormDraft('models');
+  const target = scope === 'default' ? (draft.default = capsObj(draft.default)) : (capsObj(draft.chats)[scope] = capsObj(capsObj(draft.chats)[scope]));
+  const text = String(value).trim();
+  if (text === '') delete target[col];
+  else target[col] = text;
+}
+
+function capsModels(t) {
+  const draft = capsNormDraft('models');
+  const chats = Object.keys(capsObj(draft.chats));
+  const rows = [capsModelRow('default', capsObj(draft.default))].concat(chats.map((scope) => capsModelRow(scope, capsObj(draft.chats[scope])))).join('');
+  return '<div class="row"><button onclick="capsChatAdd(\'models\')">加一行（某个群 / 某人换模型）</button>'
+    + '<span class="meta">留空 = 用默认；命中顺序：精确会话 → g:群号 → u:QQ → default</span></div>'
+    + '<table><thead><tr><th>范围</th><th>provider</th><th>model</th><th>reasoningEffort</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+    + '<div class="meta" style="margin-top:6px">改完发「/模型 重载」或重启 dsh web 才对已有会话生效（新会话立刻生效）。</div>';
+}
+
+// qq_* 工具的中文名 + 一句话用途（正文展开自 tools/tool-manifest.json 的 chip 字段）。
+// 控制台的目录抓取只认 `name: 'qq_*'` 这一行，跨行描述会漏（实测只抓不全），
+// 所以中文名必须内置全量；清单外的名字（宿主自带工具）回退显示原名。
+const CAPS_TOOL_LABELS = {
+  qq_group_files: ['群文件列表', '看本群的群文件与文件夹'],
+  qq_group_albums: ['群相册', '看本群相册里有哪些照片'],
+  qq_image_search: ['以图搜图', '用百度识图反查一张图的来源'],
+  qq_see_image: ['看图', '把本地图片真的交给模型看'],
+  qq_recent_images: ['群图清单', '列出本群最近收到的图片（只有元数据），再决定要不要看'],
+  qq_kb_search: ['知识库检索', '在资料库里按关键词找片段'],
+  qq_face_list: ['表情清单', '列出能用的黄脸表情'],
+  qq_face_send: ['发表情', '往当前聊天发一个 QQ 表情'],
+  qq_send_image: ['发图片', '发一张本地图片到聊天'],
+  qq_send_file: ['发文件', '发一个本地文件到聊天'],
+  qq_send_voice: ['发语音', '用 TTS 合成一条语音发出去'],
+  qq_recall: ['撤回', '撤回自己最近发的消息'],
+  qq_memory_note: ['记长期记忆', '给这个聊天追加一条长期记忆'],
+  qq_memory_fix: ['修正记忆', '改掉记错的长期记忆（留痕）'],
+  qq_draw_image: ['画图', '画一张图并发到聊天'],
+  qq_locate: ['查定位索引', '查这个聊天里谁在哪句话出现过'],
+  qq_mood: ['看心情', '看自己此刻的心情与精力'],
+  qq_read_unread: ['看未读', '看这个聊天里还没处理的新消息（自主模式）'],
+  qq_send_message: ['主动补一句', '主动往聊天补一句（自主模式，有额度）'],
+  qq_people: ['看群友印象', '读这个聊天里的人与群风格档案'],
+  qq_people_note: ['记群友印象', '给某人写一条一句话印象'],
+  qq_member_info: ['查群成员', '查本群成员资料与群名片'],
+  qq_recent_history: ['看最近聊天', '读最近的聊天记录'],
+  qq_search_history: ['搜历史', '全文检索历史归档'],
+  qq_react: ['贴表情回应', '给某条消息贴一个表情回应'],
+};
+
+/** 工具的中文名（认不出就原样显示）。 */
+function capsToolLabel(name) {
+  const hit = CAPS_TOOL_LABELS[name];
+  return hit === undefined ? String(name) : hit[0];
+}
+
+/** 工具的中文用途（认不出就说明它不在内置清单里）。 */
+function capsToolWhy(name) {
+  const hit = CAPS_TOOL_LABELS[name];
+  return hit === undefined ? '内置清单里没有：多半是宿主自带工具' : hit[1];
+}
+
+/** 可选工具名：内置 27 个 ∪ 控制台目录里抓到的，按中文名排序。 */
+function capsToolNameList() {
+  const seen = new Set(Object.keys(CAPS_TOOL_LABELS));
+  for (const name of Array.isArray(capsCands.tools) ? capsCands.tools : []) seen.add(String(name));
+  return Array.from(seen).sort((a, b) => capsToolLabel(a).localeCompare(capsToolLabel(b), 'zh'));
+}
+// ── 表 3：每会话工具白名单 ──
+function capsToolChips(scope, col) {
+  const list = capsToolList(scope, col);
+  if (list.length === 0) return '<span class="meta">（空）</span>';
+  const chips = list.map((name) => '<span style="display:inline-block;margin:2px 4px 2px 0;padding:1px 6px;border:1px solid #3a4150;border-radius:10px;background:#20242c">'
+    + '<span title="' + capsEsc(name + '：' + capsToolWhy(name)) + '">' + capsEsc(capsToolLabel(name)) + '</span>'
+    + '<button style="border:0;background:transparent;color:#e0a0a0;cursor:pointer;padding:0 0 0 4px"'
+    + ' onclick="capsToolDel(\'' + capsJs(scope) + '\',\'' + col + '\',\'' + capsJs(name) + '\')">×</button></span>').join('');
+  return chips;
+}
+
+function capsToolPicker(scope, col) {
+  const picked = capsToolList(scope, col);
+  const options = capsToolNameList().filter((name) => picked.indexOf(name) < 0);
+  const star = col === 'allow' && picked.indexOf('*') < 0
+    ? '<option value="*">全部工具（不限制）</option>'
+    : '';
+  const list = options.map((name) => '<option value="' + capsEsc(name) + '">'
+    + capsEsc(capsToolLabel(name)) + '（' + capsEsc(name) + '）</option>').join('');
+  return '<select style="max-width:260px" onchange="capsToolAdd(\'' + capsJs(scope) + '\',\'' + col + '\',this.value)">'
+    + '<option value="">+ 选工具加入' + (col === 'allow' ? '放行' : '拦下') + '…</option>' + star + list + '</select>';
+}
+function capsToolEntry(scope) {
+  const draft = capsNormDraft('tools');
+  if (scope === 'default') return (draft.default = capsObj(draft.default));
+  const chats = capsObj(draft.chats);
+  chats[scope] = capsObj(chats[scope]);
+  return chats[scope];
+}
+
+function capsToolList(scope, col) {
+  const entry = capsToolEntry(scope);
+  return Array.isArray(entry[col]) ? entry[col].map(String) : [];
+}
+
+function capsToolAdd(scope, col, name) {
+  const text = String(name === undefined || name === null ? '' : name).trim();
+  if (text === '') return;
+  const entry = capsToolEntry(scope);
+  const list = capsToolList(scope, col);
+  if (list.indexOf(text) < 0) list.push(text);
+  entry[col] = list;
+  renderCaps();
+  toast('已加入' + (col === 'allow' ? '放行' : '拦下') + '：' + capsToolLabel(text) + '（还要点保存）');
+}
+
+function capsToolDel(scope, col, name) {
+  const entry = capsToolEntry(scope);
+  const list = capsToolList(scope, col).filter((item) => item !== name);
+  if (list.length === 0) delete entry[col];
+  else entry[col] = list;
+  renderCaps();
+}
+
+function capsToolAddManual(scope, col, input) {
+  const text = String(input.value === undefined ? '' : input.value).trim();
+  if (text === '') return;
+  capsToolAdd(scope, col, text);
+}
+function capsToolRow(scope, entry) {
+  const label = scope === 'default'
+    ? '<span class="meta">（兜底：其它聊天都按这条）</span>'
+    : capsKeyCell('tools', scope, scope);
+  const allow = capsToolList(scope, 'allow');
+  const deny = capsToolList(scope, 'deny');
+  const warn = allow.length > 0 && deny.length > 0
+    ? '<div class="meta" style="color:#e0c080">两边都填了：放行优先，拦下这栏现在不起作用</div>'
+    : '';
+  const manual = (col) => '<input type="text" placeholder="手输工具名" style="width:140px;margin-top:4px"'
+    + ' onchange="capsToolAddManual(\'' + capsJs(scope) + '\',\'' + col + '\',this)">';
+  return '<tr><td style="width:200px">' + label + warn + '</td>'
+    + '<td>' + capsToolChips(scope, 'allow')
+    + '<div style="margin-top:4px">' + capsToolPicker(scope, 'allow') + manual('allow') + '</div></td>'
+    + '<td>' + capsToolChips(scope, 'deny')
+    + '<div style="margin-top:4px">' + capsToolPicker(scope, 'deny') + manual('deny') + '</div></td>'
+    + '<td>' + (scope === 'default' ? '' : '<button class="danger" onclick="capsChatDel(\'tools\',\'' + capsJs(scope) + '\')">删</button>') + '</td></tr>';
+}
+function capsTools(t) {
+  const draft = capsNormDraft('tools');
+  const chats = Object.keys(capsObj(draft.chats));
+  const rows = [capsToolRow('default', capsObj(draft.default))].concat(chats.map((scope) => capsToolRow(scope, capsObj(draft.chats[scope])))).join('');
+  return '<div class="row"><button onclick="capsChatAdd(\'tools\')">加一行（某个群 / 某人限制工具）</button>'
+    + '<span class="meta">点工具名加入，点 × 取消；填了「只放行」就只给它这几个，填了「拦下」就只拦这几个，两边都填时只放行生效。</span></div>'
+    + '<table><thead><tr><th>范围</th><th>只放行</th><th>拦下</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+    + '<div class="meta" style="margin-top:6px">都不选 = 这个聊天不限制工具；「全部工具（不限制）」= 显式写一个 <code>*</code>。</div>'
+    + '<div class="meta" style="margin-top:6px;color:#e0c080">这份表在<b>会话建立时</b>读一次：改完必须在对应聊天里对机器人发 <code>/new</code> 开新会话（或重启 dsh web）才生效。旧会话还在用旧白名单——不是缓存没刷，是装配只发生一次。</div>';
+}
+// ── 表 4：出站回复审计 ──
+const CAPS_AUDIT_SAMPLES = [
+  { name: '手机号', pattern: '1[3-9]\\d{9}', block: false },
+  { name: '身份证', pattern: '\\d{17}[\\dXx]', block: true },
+  { name: '外部链接', pattern: 'https?://', block: false },
+];
+
+function capsAuditSet(col, value) {
+  const draft = capsNormDraft('audit');
+  if (col === 'log') { draft.log = value === 'all' ? 'all' : 'matches'; return; }
+  if (col === 'maxSnippet') {
+    if (value === '' || Number.isFinite(Number(value)) === false) delete draft.maxSnippet;
+    else draft.maxSnippet = Math.min(500, Math.max(0, Math.floor(Number(value))));
+    return;
+  }
+  draft[col] = value === true;
+}
+
+function capsAuditRuleSet(index, col, value) {
+  const draft = capsNormDraft('audit');
+  const rule = draft.rules[index];
+  if (rule === undefined) return;
+  if (col === 'block') rule.block = value === true;
+  else if (col === 'flags') {
+    const text = String(value).replace(/g/g, '').trim();
+    if (text === '') delete rule.flags;
+    else rule.flags = text;
+  } else {
+    const text = String(value);
+    if (text.trim() === '' && col === 'name') delete rule.name;
+    else rule[col] = text;
+  }
+}
+
+function capsAuditRuleAdd() {
+  const draft = capsNormDraft('audit');
+  draft.rules.push({ name: '新规则', pattern: '', flags: 'i', block: false });
+  renderCaps();
+}
+
+function capsAuditRuleAddSample(index) {
+  const draft = capsNormDraft('audit');
+  const sample = CAPS_AUDIT_SAMPLES[index];
+  if (sample === undefined) return;
+  draft.rules.push({ name: sample.name, pattern: sample.pattern, flags: 'i', block: sample.block });
+  renderCaps();
+  toast('已加示例规则「' + sample.name + '」，记得点保存');
+}
+
+function capsAuditRuleDel(index) {
+  const draft = capsNormDraft('audit');
+  draft.rules.splice(index, 1);
+  renderCaps();
+}
+
+/** 测试按钮：拿一条样例立刻告诉你命中没（正则编译失败会直接说错在哪）。 */
+function capsAuditRuleTest(index) {
+  const draft = capsNormDraft('audit');
+  const rule = draft.rules[index];
+  if (rule === undefined) return;
+  const sample = prompt('输入一句话，试试这条规则命中不命中：', '我的手机号 13800138000');
+  if (sample === null) return;
+  let regex = null;
+  try {
+    regex = new RegExp(String(rule.pattern ?? ''), String(rule.flags ?? 'i').replace(/g/g, ''));
+  } catch (error) {
+    toast('❌ 正则写错了：' + error.message);
+    return;
+  }
+  const hit = regex.test(sample);
+  toast((hit ? '✅ 命中' : '⚪ 没命中') + '：这条规则 ' + (rule.block === true ? '会拦截' : '只记一条'));
+}
+
+function capsAudit(t) {
+  const draft = capsNormDraft('audit');
+  const log = draft.log === 'all' ? 'all' : 'matches';
+  const rules = draft.rules.map((rule, index) => {
+    const entry = capsObj(rule);
+    return '<tr><td><input type="text" style="width:110px" placeholder="手机号" value="' + capsEsc(entry.name ?? '')
+      + '" onchange="capsAuditRuleSet(' + index + ',\'name\',this.value)"></td>'
+      + '<td><input type="text" style="width:100%;font-family:monospace" placeholder="1[3-9]\\\\d{9}" value="' + capsEsc(entry.pattern ?? '')
+      + '" onchange="capsAuditRuleSet(' + index + ',\'pattern\',this.value)"></td>'
+      + '<td><input type="text" style="width:52px;font-family:monospace" placeholder="i" value="' + capsEsc(entry.flags ?? '')
+      + '" onchange="capsAuditRuleSet(' + index + ',\'flags\',this.value)"></td>'
+      + '<td style="white-space:nowrap"><label class="meta"><input type="checkbox"' + (entry.block === true ? ' checked' : '')
+      + ' onchange="capsAuditRuleSet(' + index + ',\'block\',this.checked)"> 拦截</label></td>'
+      + '<td style="white-space:nowrap"><button onclick="capsAuditRuleTest(' + index + ')">试一下</button>'
+      + '<button class="danger" onclick="capsAuditRuleDel(' + index + ')">删</button></td></tr>';
+  }).join('');
+  const samples = CAPS_AUDIT_SAMPLES.map((sample, index) =>
+    '<button onclick="capsAuditRuleAddSample(' + index + ')">+ ' + capsEsc(sample.name) + '</button>').join(' ');
+  return '<div class="row">'
+    + '<label class="meta">记录哪些：<select onchange="capsAuditSet(\'log\',this.value)">'
+    + '<option value="matches"' + (log === 'matches' ? ' selected' : '') + '>只记命中的</option>'
+    + '<option value="all"' + (log === 'all' ? ' selected' : '') + '>全部都记</option></select></label>'
+    + '<label class="meta"><input type="checkbox"' + (draft.block === true ? ' checked' : '') + ' onchange="capsAuditSet(\'block\',this.checked)"> 规则里没写"拦截"的默认也拦</label>'
+    + '<label class="meta"><input type="checkbox"' + (draft.storeText !== false ? ' checked' : '') + ' onchange="capsAuditSet(\'storeText\',this.checked)"> 日志里存原文</label>'
+    + '<label class="meta">片段长度 <input type="number" style="width:80px" value="' + (typeof draft.maxSnippet === 'number' ? draft.maxSnippet : 120)
+    + '" onchange="capsAuditSet(\'maxSnippet\',this.value)"></label>'
+    + '</div>'
+    + '<div class="row"><button onclick="capsAuditRuleAdd()">加一条规则</button><span class="meta">现成示例：</span>' + samples + '</div>'
+    + (rules === '' ? '<div class="meta">（还没有规则，先加一条或点右边示例）</div>'
+      : '<table><thead><tr><th>名称</th><th>正则 pattern</th><th>flags</th><th>动作</th><th></th></tr></thead><tbody>' + rules + '</tbody></table>')
+    + '<div class="meta" style="margin-top:6px">flags 里的 g 会被自动去掉（带 g 的正则时而命中时而不命中，是坑）。改完 5 秒内生效。</div>';
+}
+
+/** 这张表该用哪套渲染：深结构走专门表单，其余走 CAPS_FIELDS 字段控件 + 预设。 */
+function capsStructured(t) {
+  const draft = capsDraft[t.key] ?? {};
+  if (t.key === 'capabilities') return capsCapabilities(t);
+  if (t.key === 'models') return capsModels(t);
+  if (t.key === 'tools') return capsTools(t);
+  if (t.key === 'audit') return capsAudit(t);
+  const fields = CAPS_FIELDS[t.key] ?? [];
+  return capsPresetRow(t.key) + fields.map((spec) => capsField(t.key, spec, draft)).join('');
+}
+
 async function refresh() {
   try {
     const status = await api('/api/status');
@@ -888,6 +1908,81 @@ async function loadJobs() {
   }
 }
 
+async function loadUsage() {
+  const out = document.getElementById('usageOut');
+  const state = document.getElementById('usageState');
+  state.textContent = '读取中…';
+  try {
+    const r = await api('/api/qq-usage');
+    if (r.ok !== true) { state.textContent = ''; out.textContent = '⚠️ ' + (r.reason || '用量与花费页不可用'); return; }
+    const lines = [];
+    const money = (value) => '¥' + (Math.round((Number(value) || 0) * 10000) / 10000).toFixed(4);
+    if (r.empty === true) {
+      lines.push('还没有账本：桥在模型完成一步后才会写一行。');
+    } else {
+      lines.push('账本：' + r.ledgerFile + '（' + (r.ledgerLines || 0) + ' 行）');
+      lines.push('今日：' + (r.today === null || r.today === undefined ? '还没花钱' : money(r.today.cny) + ' · ' + r.today.steps + ' 步'));
+      lines.push('近 7 天：' + money(r.week) + '（合计 ' + money(r.totals.cny) + ' · ' + r.totals.steps + ' 步）');
+      lines.push('');
+      lines.push('按会话（最多 30 条）：');
+      for (const row of (r.chats || [])) lines.push('  ' + String(row.key).padEnd(22) + money(row.cny) + '  ' + row.steps + ' 步');
+      lines.push('');
+      lines.push('按天：');
+      for (const row of (r.days || [])) lines.push('  ' + String(row.date).padEnd(12) + money(row.cny) + '  ' + row.steps + ' 步');
+      if ((r.models || []).length > 0) {
+        lines.push('');
+        lines.push('按模型：' + r.models.map((row) => row.model + ' ' + money(row.cny)).join('、'));
+      }
+    }
+    for (const w of (r.warnings || [])) lines.push('⚠️ ' + w);
+    lines.push('');
+    lines.push(r.note || '');
+    out.textContent = lines.join('\n');
+    state.textContent = '';
+  } catch (error) {
+    state.textContent = '';
+    out.textContent = '⚠️ ' + error.message;
+  }
+}
+async function loadTools() {
+  const out = document.getElementById('toolsOut');
+  if (out !== null) out.style.whiteSpace = 'normal';
+  const r = await api('/api/qq-tools');
+  if (r.ok !== true) {
+    if (out !== null) out.innerHTML = '<span style="color:#e0a0a0">读取失败：' + capsEsc(r.reason === undefined ? '' : r.reason) + '</span>';
+    return;
+  }
+  const catalog = Array.isArray(r.tools) ? r.tools : [];
+  const known = Object.keys(CAPS_TOOL_LABELS).length;
+  const head = '<div class="meta">工具目录：内置中文名 ' + known + ' 个，控制台从桥源码里认出 ' + catalog.length + ' 个'
+    + (catalog.length < known ? '（描述跨行的没认出来，属于正常）' : '') + '。</div>';
+  const rows = (Array.isArray(r.rules) ? r.rules : []).map((row) => {
+    const mode = row.mode === 'allow' ? '只放行' : (row.mode === 'deny' ? '拦下' : '不限制');
+    const source = row.source === '精确键' ? '本会话单独配的'
+      : (row.source === 'default' ? '没单独配 → 走默认规则' : '继承群号那层（' + row.source + '）');
+    const names = (Array.isArray(row.names) ? row.names : []).map(capsToolLabel);
+    const shown = names.length === 0 ? '—'
+      : (names.slice(0, 8).join('、') + (names.length > 8 ? ' 等 ' + names.length + ' 个' : ''));
+    return '<tr><td>' + capsEsc(row.key) + '</td><td>' + capsEsc(source) + '</td>'
+      + '<td style="white-space:nowrap">' + mode + '</td><td>' + capsEsc(shown) + '</td></tr>';
+  }).join('');
+  const missing = Array.isArray(r.missing) ? r.missing : [];
+  const table = rows === ''
+    ? '<div class="meta">（还没有任何会话，白名单表也没配）</div>'
+    : '<table><thead><tr><th>会话</th><th>这条规则哪来的</th><th>模式</th><th>生效的工具</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  const catalogRows = catalog.map((item) => '<tr><td>' + capsEsc(capsToolLabel(item.name)) + '</td>'
+    + '<td class="meta">' + capsEsc(item.name) + '</td><td>' + capsEsc(capsToolWhy(item.name)) + '</td></tr>').join('');
+  const catalogBox = catalogRows === '' ? ''
+    : '<details style="margin-top:6px"><summary class="meta">工具目录（点开看每个工具干什么）</summary>'
+      + '<table><thead><tr><th>中文名</th><th>原名</th><th>用途</th></tr></thead><tbody>' + catalogRows + '</tbody></table></details>';
+  if (out !== null) {
+    out.innerHTML = head + table
+      + (missing.length > 0 ? '<div class="meta" style="color:#e0c080">表里配了但还没有对应会话的键：' + capsEsc(missing.join('、')) + '</div>' : '')
+      + catalogBox;
+  }
+}
+
+
 async function loadGroups() {
   const out = document.getElementById('groupsOut');
   const state = document.getElementById('groupsState');
@@ -1039,6 +2134,8 @@ loadQr();
 loadArchive();
 loadPerf();
 loadJobs();
+loadTools();
+loadUsage();
 loadGroups();
 runDiagnose();
 loadAcceptance();
@@ -1050,6 +2147,8 @@ if (streamMode !== 'off') {
   setInterval(() => { if (!document.hidden) loadInbox(false); }, 15000);
   // 定时任务/群配置变化慢，自动刷新频率低一些（也不在页面不可见时空转）
   setInterval(() => { if (!document.hidden) loadJobs(); }, 20000);
+  setInterval(() => { if (!document.hidden) loadTools(); }, 60000);
+  setInterval(() => { if (!document.hidden) loadUsage(); }, 60000);
   setInterval(() => { if (!document.hidden) loadGroups(); }, 30000);
 }
 </script>

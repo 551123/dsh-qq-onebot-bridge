@@ -110,6 +110,40 @@ for (const name of files) {
 }
 check('所有具名 import 都能在目标模块找到导出', missingExports.length === 0, missingExports.join('; '))
 
+// ---- 反向：别的模块导出的全大写常量，被裸用就必须 import ----
+// 2026-10-26 事故：bridge.js 的 #faceTagsFor() 用了 faces.js 的 FACE_EMOTION_HINTS 却没 import，
+// 每次组装回复都抛 ReferenceError，整条文字回复发不出去（表情照发，因为不走这条路）。
+// 上面那条检查只查「已 import 的名字确有导出」，查不出「该 import 却没 import」，所以补这条反向检查。
+const CONST_EXPORTS = new Map() // NAME -> 定义它的文件
+for (const name of files) {
+  for (const match of readFileSync(join(libDir, name), 'utf8').matchAll(/^export\s+const\s+([A-Z][A-Z0-9_]{2,})\b/gm)) {
+    CONST_EXPORTS.set(match[1], name)
+  }
+}
+const undeclaredConstants = []
+for (const name of files) {
+  const text = readFileSync(join(libDir, name), 'utf8')
+  const declared = new Set()
+  for (const match of text.matchAll(/(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)) declared.add(match[1])
+  for (const match of text.matchAll(/import\s*\{([^}]*)\}/g)) {
+    for (const part of match[1].split(',')) {
+      const piece = part.trim()
+      if (piece) declared.add(/^([\w$]+)\s+as\s+/.exec(piece)?.[1] ?? piece)
+    }
+  }
+  for (const match of text.matchAll(/import\s+(?:\*\s*as\s+)?([A-Za-z_$][\w$]*)\s+from/g)) declared.add(match[1])
+  // 注释里可能出现常量名（解释性文字），不算引用
+  const body = text.split(/\r?\n/).filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line)).join('\n')
+  for (const [symbol, owner] of CONST_EXPORTS) {
+    if (owner === name || declared.has(symbol)) continue
+    if (new RegExp('(?:^|[^.\\w$])' + symbol + '\\b').test(body)) {
+      undeclaredConstants.push(`${name} 用了 ${owner} 的 ${symbol} 却没 import`)
+    }
+  }
+}
+check('跨模块使用的全大写常量都已在文件内 import（漏了就是 ReferenceError，整条回复发不出）',
+  undeclaredConstants.length === 0, undeclaredConstants.join('; '))
+
 // ---- package.json 与入口一致 ----
 const pkg = JSON.parse(readFileSync(join(libDir, '..', 'package.json'), 'utf8'))
 check('package.json 版本与 CHANGELOG 顶部一致', (() => {

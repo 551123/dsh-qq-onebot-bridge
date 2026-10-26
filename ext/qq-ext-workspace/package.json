@@ -1,0 +1,13 @@
+{
+  "name": "qq-ext-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./body.mjs": "./body.mjs"
+  },
+  "license": "MIT",
+  "description": "工作区 3 个只读工具（qq_read_file / qq_list_files / qq_search_files，从补丁 04 迁出）"
+}
