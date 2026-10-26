@@ -362,6 +362,17 @@ Once something is public and used, it cannot be renamed casually — so the rule
   there is a number, the three rules above apply.
 - Internals (private methods, file formats, trace fields) are **not** covered — they may change freely.
 
+### About forks: upstream is a single line
+
+- **This repository maintains `main` plus tags only** (e.g. `v0.7.4`). A GitHub fork is **someone else's copy**: it is not an
+  upstream branch and never lands here automatically — no matter how many commits a fork has, this `main` is unaffected.
+- **We do not merge or rebase other people's fork history**: those commits follow their author's own rhythm and folding them in
+  would make the history unreadable. Contribute via an issue or a PR (a small PR is fastest); maintaining your own line is
+  perfectly fine too — rebase on our tags. We will not copy your commit history, but **ideas are fair game** (v0.7.4's taint
+  window came from issue #4's patch branch).
+- Install from **this repository or the npm package**, not from an arbitrary fork — the code there may be modified, while the
+  README and CHANGELOG describe this line only.
+
 ## Commands & debugging
 
 - `/new`: end the current session and start a fresh one
