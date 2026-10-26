@@ -310,7 +310,21 @@ ctx.qqBridge.registerToolProvider(({ agentCtx, route, key, config }) => ({
 - **入站事件在白名单 / 静默 / 去重之后、命令与模型之前**发出：监听**不可能**绕过门禁；文本是归一化后的那份。
 - **只读**：事件不能改写内容、不能拦截消息；监听器抛错或异步 reject 只记一条 debug。
 - **工具 provider 是实验功能、默认关**：只能新增（不能覆盖 10 个内置 `qq_*` 工具）、provider 抛错只跳过它自己、
-  每 provider 8 工具 / 4 段、总计 24 / 12 的上限；注入与跳过全部进 trace。**外部扩展的行为不在本项目维护范围内。**
+  每 provider **16 工具 / 4 段**、总计 **40 / 12** 的上限；注入与跳过全部进 trace。**外部扩展的行为不在本项目维护范围内。**
+  （工具上限 v0.7.1 从 8 抬到 16：有真实使用者按"一个包一类工具"拆分，正好卡在 8 上。提示段仍是 4 —— 那是每条消息的固定成本。）
+- **写 provider 的三条注意事项**（① 是第三方实战报告，②③ 已按宿主源码核对）：
+  ① **不要改写 `agentCtx.tools`**（比如给 `.register` 赋值）。`agentCtx.tools` 背后是宿主**共享的** `ToolRuntime`
+     （`@deepseek-ai/dsh-tools` 里 `class ToolRuntime extends Service`；`register()` 内部是
+     `this.layers.effect(this.ctx, layer => layer.tools.insert(name, definition))`）。第三方实测：直接赋值会落到
+     进程级实例上，**所有** agent 一起被改，且没有任何警告。想按会话过滤工具，正确做法是 `Object.create(tools)` 造视图 +
+     只 `defineProperty` 一个 `register`，再用 Proxy 只拦 `tools` 这一个键，其余（`systemPrompt` / `context` / `ctx`）反射透传。
+  ② **`tools.restrict({ allow, deny })` 只作用于全局工具**，不是"把这一层收窄成几个"。按 `@deepseek-ai/dsh-tools@0.2.0-rc.2`
+     的类型原话：*"Per-scope filter over global tools. Restrictions intersect and do not affect scoped registrations"*，
+     `allow` 是 *"Global tool names that stay visible; everything else is removed"*。
+     所以：**没被点名的全局工具会静默消失**（预设层的 `web_search` 也会），而**自己 scope 里注册的工具不受影响**。
+  ③ 上面那个 `restrict` 还有一半是不静默的：名字必须是**已知全局工具**，写错名字（以及空 filter、`run_code`、scope 内名字）
+     会**直接抛错**（`unknown global tool` / `requires a scoped context` / `is a no-op`）。
+     要收窄优先用 `deny`（只禁点名的），或者把过滤做在自己的视图层，别去动共享 runtime。
 - 不做的事（评估过）：**出站内容改写 / 可拦截事件**（等于开"替机器人说话""静默吞消息"的旁路）、多账号多实例、向量记忆。
 
 ### 兼容承诺（我们怎么改这些接口）
@@ -544,10 +558,10 @@ npm run control            # 或 node control/bin/qq-control.mjs --open
 
 最近五个版本（始终滚动展示）：
 
+- **v0.7.1** — 「上限与文档：听外部使用者的」：issue #4 作者真的用起来了（把 17 个工具拆成三个包挂上来），撞出两件事。① **工具上限 8 → 16**（总 24 → 40）：他那个包**正好 8 个**，再加一个就得为一个工具拆包 —— 外部使用者正好卡在线上说明线画低了；**提示段仍是 4/12 不动**（那才是每条消息的固定成本）。② README 补两条"写 provider 的坑"：**不要改写 `agentCtx.tools`**（它是宿主共享 Service，赋值会顺着 cordis setter 落到进程级 ToolRuntime，**所有** agent 一起被改且无警告；正确做法是 `Object.create` 造视图 + 只 `defineProperty` 一个 `register` + Proxy 只拦 `tools`）；`tools.restrict({allow})` 是**逐名字**白名单，没点名的工具会**静默消失**（连 `web_search` 都会），要收窄优先用 `deny`。单测 `extension-unit` 46 → **50 条**；全量 **61 套 / 4079 断言全绿**
 - **v0.7.0** — 「实验性与扩展」：把 0.6.x 里评估过但没做的扩展点，以**实验性、默认关**的方式放回来。① **实例出口 `ctx.qqBridge`**：`sendText/sendImage/sendFile/sendVoice` 以桥的身份发消息，**复用原有护栏**（出站限流 / 注入抑制 / 路径解析 / ActionGate 配额 / TTS 检查）**并额外检查目标是否在白名单**；另有只读快照 `sessions()/agents()/config()`（副本，密钥类键抹掉）。每次出口发送都进 trace。② **只读事件 `qqbridge:inbound` / `qqbridge:outbound`**：只能观察、不能改写/拦截；入站事件在白名单/静默/去重之后发出，出站事件在真的发出去之后发出并带 `kind`。③ **实验性工具 provider 链**（`registerToolProvider`，默认关 `extensionToolsEnabled`）：第三方往每个会话注入工具与提示段——只能**新增**不能覆盖内置、抛错只跳过它自己、有条数上限、注入内容全部进 trace；面板新增「实验性（EXPERIMENTAL）」组。新增 `test/extension-unit.mjs`（46 条），面板 78 → **79 键**；全量 **61 套 / 4075 断言全绿**
 - **v0.6.9** — 「查得到 · 找得到 · 引得到」：三件"少一次翻找"的小事。① **`/为什么`**（新命令）：引用那条消息发 `/为什么`（或 `/为什么 <消息id>`、不带参数查最近一条；口语「为什么没回」也认），把 trace 决策链翻成人话——`收到消息✅ → 白名单✅ → 静默时段⛔` + 「卡在「静默时段」：避开高峰期静默中（09:00-12:00）」；四种形状都有人话结论（被拦 / 一路通过并回复 / 走到模型没出站回复 / 被命令等前置分支处理，不会误报"没回复"），群里仅管理员可用、不回显原文。翻译逻辑抽成 `summarizeTrace()`，口语识别在 `lib/why.js`（整句才命中，带别的话照常交给模型）。② **面板搜索框**：按中文标签 / 配置键名 / 说明过滤（纯前端，不发请求不改配置），命中组的整组保留、否则只留命中的行，搜索时「进阶」组自动展开，顶部显示「匹配 N 组 / M 行」，无命中给"换个词"提示。③ **回复带引用**（`quoteReplyEnabled`，默认关，**只作用于群聊**）：打开后群回复第一批带 QQ 原生 `reply` 段；引用失败（撤回 / ID 过期 / 客户端不支持）自动去掉引用重发一次；注入回放与无 messageId 不挂引用。出站有两条路径（命令 `#reply()` 与模型 `assistant/message`），两条都统一过 `#quoteFor()` —— 第一版漏了模型路径，真机回归补上。新增 `test/why-unit.mjs`（17 条）与 `test/quote-unit.mjs`（11 条），`settings-unit` 267 → **271**，面板 77 → **78 个键**；全量 **60 套 / 4020 断言全绿**
 - **v0.6.8** — 「避开高峰期进面板」：避开高峰期（`quietHoursEnabled` / `quietHours` / `quietWeekendExempt`）功能本来就有，但只能改 YAML；现在整组搬进面板——**避开高峰期**（默认关）、**周末不静默**（默认开）、**静默时段**（列表控件：每段两个原生时间控件，支持跨夜 `22:00-6:00`，最多 8 段，空列表 = 不静默）。时段按引擎口径归一化（`9:0-12:0` → `09:00-12:00`），起止相同/越界/看不懂一律 400 且不动文件；配置里写成流式数组 `["09:00-12:00","22:00-06:00"]`，`readPatchValue` 能读回来（所以也有「更新中」）。顺带修掉「默认」徽标只认布尔的问题（数值/时段行的默认值现在也从 schema 现读）；**点完立即更新状态，随后变灰锁 3 秒、再自动刷新一次**（实测宿主 ~2.3 秒应用补丁）、**「刷新」有反馈**（刷新中… / 「已刷新：N 组 · 宿主 vX」），标题右侧常驻显示宿主加载的版本，看不到新分组时先看它；**面板在"插件由 bundle 挂载"的 profile 里也能写了**（没有条目就按 patch 的规矩追加一条，不再报「没有该条目」）。面板 **10 组 63 开关 + 11 数值 + 1 时段列表 + 2 白名单**；`settings-unit` 213 → **267**；全量 **58 套 / 3988 断言全绿**
 - **v0.6.7** — 「可自定义数值」：加了**「每分钟会话上限」**——一个开关（`chatTurnLimitEnabled`，**默认关**）+ 一个数值（`chatTurnsPerMinute`，1–10、**默认 5**）。开关关着时完全不限流（升级上来的忙群行为不变）；打开后每个会话每分钟最多让几条消息进模型，超出的丢弃并记账、不排队（与「回复限流」不同——那个管出站回多少条，这个管入站进模型多少次）。同时把面板从"只能开关"扩成**能改数值**：`− 数字 +` 控件，回车/失焦才写一次，**范围与步长从 schema 现读**（不抄第二份），越界/小数由服务端 400 拒绝并说明范围。顺手把文案里一直让人"去配置里改"的阈值全做成控件，共 **10 个数值项**（去重窗口、回复限流两项、刷屏治理四项、戳一戳每小时上限、周报天数），面板现为 **60 开关 + 10 数值**。另外：**注入/回放的帧不占配额**（本地调试流量不该被真实用户量挤掉）；`upsertPatchValue` 现在接受整数并写成数字字面量，引号包住的 `"7"` 当字符串不当数字；数值行缺范围信息时 fail closed。新增 `ratelimit-unit`（12 条）；`commands-unit` 78 → **83**，`settings-unit` 193 → **210**；全量 **58 套 / 3925 断言全绿**
-- **v0.6.6** — 「调试台卡死修复」：调试台打开后页面卡死、无法交互（浏览器提示「此页面没有响应」）——两层原因一头一尾都收掉了。① **服务端**：`/api/stream` 每条连接都新建 tailer，首轮**按字节**把 trace 末尾（256 KiB）当事件推出去，本机 254 KiB 的文件 = 3 秒内 **1180 条事件**；现在首轮按**条数**封顶（最近 300 条），要历史仍走 `/api/trace?limit=`。② **前端**：`onmessage` 原来是"来一条就整表重绘一次"（`renderStream()` 重建至多 400 行 `innerHTML` + `updateErrPill()`），1180 次重绘把渲染进程按死；现在**合并重绘**（`scheduleStreamRender`，最多每 250ms 画一次，一次突发 = 一次重绘）。实测同一份 trace：**1180 条 / 263 KB → 303 条 / 68 KB**，前端重绘 **1180 次 → 1 次**。③ 顺带修掉同一功能里的错误用法：桌面端的 `process.execPath` 是 **Electron 本体**，原来直接拿它跑 `control/bin/qq-control.mjs` ⇒ 等于把这支脚本当成一个 **Electron 应用的入口**（真机实测控制台进程命令行就是 `"…\DeepSeek Harness.exe" …\qq-control.mjs`、占 126 MB）；现按官方文档补 `ELECTRON_RUN_AS_NODE=1`（只追加、不覆盖宿主环境），CLI 宿主不受影响。`console-debug-unit` 72 → **78**，`settings-unit` 189 → **193**；全量 **57 套 / 3891 断言全绿**
 
 **更早的版本（v0.4 线及之前）见 [CHANGELOG.md](CHANGELOG.md)** —— 完整历史、每个版本的缺陷清单与测试计数都在那里。

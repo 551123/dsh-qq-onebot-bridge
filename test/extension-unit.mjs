@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BUILTIN_TOOL_NAMES, QQBridge } from '../lib/bridge.js'
 import {
-  EXTENSION_EVENTS, EXTENSION_SERVICE, attachExtensionService, collectProviderAdditions,
+  EXTENSION_EVENTS, EXTENSION_SERVICE, PROVIDER_LIMITS, attachExtensionService, collectProviderAdditions,
   getExtensionApi, redactConfig,
 } from '../lib/extension.js'
 
@@ -271,10 +271,65 @@ check('provider 名与贡献条数进 notes（给 trace 用）',
 
 // 上限：一个 provider 塞太多工具会被截断
 const many = collectProviderAdditions({
-  providers: [{ name: 'spam', fn: () => ({ tools: Array.from({ length: 20 }, (unused, i) => fakeTool(`spam_${i}`)) }) }],
+  providers: [{ name: 'spam', fn: () => ({ tools: Array.from({ length: 40 }, (unused, i) => fakeTool(`spam_${i}`)) }) }],
   builtinNames: BUILTIN_TOOL_NAMES,
 })
-check('★provider 链有条数上限（防塞爆提示词）', many.tools.length <= 8, String(many.tools.length))
+check('★provider 链有条数上限（防塞爆提示词），且上限来自 PROVIDER_LIMITS',
+  many.tools.length === PROVIDER_LIMITS.toolsPerProvider, `${many.tools.length} / 上限 ${PROVIDER_LIMITS.toolsPerProvider}`)
+/**
+ * ★ v0.7.1（issue #4 反馈「小屋那个包正好 8 个工具，再加一个就得拆包」）：
+ *   工具上限抬到 16，**提示段仍是 4/12** —— 提示段是每条消息的固定成本，工具只是 schema。
+ */
+check('★工具上限抬到 16，提示段仍是每 provider 4（不为工具数量牺牲提示段预算）',
+  PROVIDER_LIMITS.toolsPerProvider === 16 && PROVIDER_LIMITS.sectionsPerProvider === 4
+  && PROVIDER_LIMITS.toolsTotal >= 16 && PROVIDER_LIMITS.sectionsTotal === 12,
+  brief(PROVIDER_LIMITS))
+check('★一个 provider 贡献 12 个工具（真实使用者的规模）不再被截断',
+  collectProviderAdditions({
+    providers: [{ name: 'hut', fn: () => ({ tools: Array.from({ length: 12 }, (unused, i) => fakeTool(`hut_${i}`)) }) }],
+    builtinNames: BUILTIN_TOOL_NAMES,
+  }).tools.length === 12)
+/**
+ * ★★ v0.7.1 复核抓到的自家漏洞：`slice()` 截断本来是**静默**的（超了上限直接丢，什么都不记），
+ *   这违反了本项目"无静默分支"的根本规矩。现在超上限本身会记一条 skipped 并进 trace。
+ */
+check('★★超出每 provider 上限时不再静默截断（工具与提示段都写明丢了几个）',
+  (() => {
+    const over = collectProviderAdditions({
+      providers: [{
+        name: 'big',
+        fn: () => ({
+          tools: Array.from({ length: PROVIDER_LIMITS.toolsPerProvider + 4 }, (unused, i) => fakeTool(`big_${i}`)),
+          sections: Array.from({ length: PROVIDER_LIMITS.sectionsPerProvider + 3 }, (unused, i) => ({ text: `s${i}` })),
+        }),
+      }],
+      builtinNames: BUILTIN_TOOL_NAMES,
+    })
+    return over.tools.length === PROVIDER_LIMITS.toolsPerProvider
+      && over.sections.length === PROVIDER_LIMITS.sectionsPerProvider
+      && over.skipped.some((item) => /工具数超过每 provider 上限/.test(item.reason) && /末尾 4 个被丢弃/.test(item.reason))
+      && over.skipped.some((item) => /提示段超过每 provider 上限/.test(item.reason) && /末尾 3 段被丢弃/.test(item.reason))
+  })(),
+  brief(collectProviderAdditions({
+    providers: [{ name: 'big', fn: () => ({ tools: Array.from({ length: PROVIDER_LIMITS.toolsPerProvider + 4 }, (unused, i) => fakeTool(`b${i}`)) }) }],
+    builtinNames: BUILTIN_TOOL_NAMES,
+  }).skipped))
+check('★★多个 provider 撞总上限时也写明"总数超过"',
+  (() => {
+    const total = collectProviderAdditions({
+      providers: [1, 2, 3].map((k) => ({
+        name: `p${k}`,
+        fn: () => ({ tools: Array.from({ length: PROVIDER_LIMITS.toolsPerProvider }, (unused, i) => fakeTool(`p${k}_${i}`)) }),
+      })),
+      builtinNames: BUILTIN_TOOL_NAMES,
+    })
+    return total.tools.length === PROVIDER_LIMITS.toolsTotal
+      && total.skipped.some((item) => /工具总数超过/.test(item.reason))
+  })(),
+  String(collectProviderAdditions({
+    providers: [1, 2, 3].map((k) => ({ name: `p${k}`, fn: () => ({ tools: Array.from({ length: PROVIDER_LIMITS.toolsPerProvider }, (unused, i) => fakeTool(`p${k}_${i}`)) }) })),
+    builtinNames: BUILTIN_TOOL_NAMES,
+  }).tools.length))
 
 // 注册/取消注册
 const offProvider = api.registerToolProvider(() => ({ tools: [], sections: [] }), { name: 'demo' })

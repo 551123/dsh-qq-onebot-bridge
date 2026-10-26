@@ -1,5 +1,47 @@
 # 更新日志 / Changelog
 ## v0.7 系列 —— 实验性与扩展 / Experimental & Extensions
+### v0.7.1（2026-10-26）— 上限与文档：听外部使用者的 / Caps and docs, after real feedback
+
+> 起因是 issue #4 作者的回帖：他真的用 `registerToolProvider` 把 17 个工具拆成三个包挂上来了。
+> 这版只改两件事，都是他撞出来的。
+
+#### 一、工具上限 8 → 16（总 24 → 40）
+
+- 他那个「小屋」包**正好 8 个工具**，再想加一个就得为一个工具拆包 —— 一个外部使用者正好卡在线上，说明线画低了。
+- **提示段仍是每 provider 4 / 总 12 不动**：提示段才是**每条消息**都进模型的固定成本，工具只占工具清单（schema），
+  而且整条链默认关。这次只放宽贵的那个没动，便宜的这个放宽。
+- 单测跟着改成"上限来自 `PROVIDER_LIMITS`"，并加一条"一个 provider 贡献 12 个工具不再被截断"（按他的真实规模钉住）。
+
+#### 三、复核抓到的自家漏洞：超限截断是**静默**的
+
+`rawTools.slice(0, 上限)` 会把多出来的悄悄丢掉，什么都不记 —— 这违反了本项目"无静默分支"的根本规矩
+（给了 20 个工具只进去 16 个，用户只能靠自己数）。现在**截断本身记一条 skipped**：
+
+```
+工具数超过每 provider 上限 16（给了 20 个，末尾 4 个被丢弃）
+提示段超过每 provider 上限 4（给了 7 段，末尾 3 段被丢弃）
+```
+
+这两条会随 `#installProviderTools` 一起进 trace，也会出现在面板「实验性」组状态行的「跳过 N 项」里。
+另加两条断言钉住：每 provider 超限、多个 provider 撞总上限（40）。
+
+`extension-unit` 46 → **50 条**；全量 **61 套 / 4079 断言全绿**。
+
+#### 二、README 补两条"写 provider 的坑"（他踩过，值得写下来）
+
+1. **不要改写 `agentCtx.tools`**（比如给 `.register` 赋值）：它是宿主共享的 Service，赋值会顺着 cordis 的 setter
+   落到**进程级** ToolRuntime 上 —— 一起被改的是**所有** agent，而且一句警告都没有。
+   正确做法是 `Object.create(tools)` 造视图 + 只 `defineProperty` 一个 `register` + Proxy 只拦 `tools`，
+   其余（`systemPrompt` / `context` / `ctx`）全部反射透传。
+2. **`tools.restrict({ allow })` 是逐名字白名单**：没被点名的工具会**静默消失**（连预设层的 `web_search` 也会）。
+   要收窄优先用 `deny`，或者把过滤做在自己的视图层，别动共享 runtime。
+
+#### 关于他提的「工具表」
+
+`#scopeTools` / `qq-tools.json` / `registerMemoryTools` / `#fencePath` 都是**他自己补丁里的东西**，
+上游没有、也不需要照抄：他那个按会话 allow/deny 的过滤层是在 `#installSession` 外面包一层视图实现的，
+而 provider 链已经给了"按会话新增工具"的正门。这版不加"统一工具表"，理由和 v0.7.0 一样：没有第二个消费者。
+
 ### v0.7.0（2026-10-25）— 实验性与扩展 / Experimental & Extensions
 
 把 0.6.x 里**评估过但没做**的扩展点，以**实验性、默认关**的方式放回来，并给它们一个集中的「实验性」组。
