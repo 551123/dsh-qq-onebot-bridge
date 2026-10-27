@@ -23,15 +23,16 @@
 
 | 项 | 数量 |
 | --- | --- |
-| 提交 | 1（HEAD） |
-| 改动文件（不含 `ext/`） | 20 个改动 + 本文 1 个新增 |
-| `ext/` | 4 个包 / 13 个文件（12 个 `index.js`+`body.mjs`+`package.json` + `README.md`） |
-| 增删行（含 `ext/` 与本文） | **+13 117 / −1 667** |
+| 提交 | 20（`.gitattributes` + 18 条补丁 + `ext/`）；加上写本文件的那个提交是 21 |
+| 改动文件（不含 `ext/`） | 20 个改动 + `.gitattributes` |
+| `ext/` | 4 个包 / 13 个文件（每包 `index.js` + `body.mjs` + `package.json`，外加 `README.md`） |
+| 增删行（不含 `ext/` 与本文） | **+10 703 / −1 663**，21 个文件 |
+| `ext/` 增删行 | **+2 232**，13 个文件 |
 | 来源 | 补丁库 `QQ助手补丁\patches\`：**18 条补丁 / 157 条编辑 / 20 个源文件** |
 
 改动最集中的文件（增 / 删行）：`lib/bridge.js` +6 797 / −1 595、`control/ui.html` +1 103 / −4、`lib/archive.js` +875 / −2、`lib/onebot.js` +370 / −12、`lib/faces.js` +317 / −6、`control/lib/supervisor.mjs` +316 / −5、`control/lib/perf.mjs` +205 / −0（新增）、`lib/index.js` +142 / −1；其余为 `lib/dice.js`、`lib/panel.js`、`control/lib/config.mjs`、`control/lib/server.mjs`、`lib/broadcast.js`、`lib/napcat-launch.js`、`lib/imagegen.js`、`lib/trace.js`、`control/lib/diagnose.mjs`。四个上游测试文件也被同步改过（`test/archive-unit.mjs`、`test/onebot-api-unit.mjs`、`test/find-unit.mjs`、`test/static-unit.mjs`）。
 
-`.gitattributes`（固定 LF）是 0.7.0 线那条独立提交带进来的；0.7.4 的重导只覆盖补丁库登记的文件，没有把它带过来 —— 也就是说这份树的行尾不做强制固定，跨平台检出时自行注意。
+`.gitattributes`（`* -text`，固定 LF）由 `tools/fork-export.mjs` 在开分支时先提交一条，0.7.5 线的每次 rebase / 重导都会带上它 —— 补丁锚点是按 LF 算的，这台机器 `core.autocrlf=true` 是系统级设置，只能靠仓库自己钉住。
 
 ## 3. 装完多出什么
 
