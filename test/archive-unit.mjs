@@ -1,4 +1,4 @@
-/** 历史归档单元测试：行格式、按天分片、检索（AND / days / limit）、过期搬迁、统计。 */
+/** 历史归档单元测试：行格式、按天分片、检索（AND / days / limit）、过期搬迁、统计、合并转发正文补档（updateLast）。 */
 import { archiveLine, parseArchiveLine, HistoryArchive } from '../lib/archive.js'
 import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
@@ -35,10 +35,10 @@ try {
   check('archiveLine 非数值字段归一为 0', parseArchiveLine(archiveLine({ ts: 'abc', userId: NaN, text: 1 })).ts === 0)
   check('archiveLine 字符串字段非字符串归一为空', parseArchiveLine(archiveLine({ chatKey: 7, name: {}, kind: [], text: 'ok' })).chatKey === '')
 
-  const longText = archiveLine({ ts: 3, text: '字'.repeat(3000) })
-  check('archiveLine 文本截断到 2000 字', parseArchiveLine(longText).text.length === 2001, String(parseArchiveLine(longText).text.length))
+  const longText = archiveLine({ ts: 3, text: '字'.repeat(6000) })
+  check('archiveLine 文本截断到 5000 字', parseArchiveLine(longText).text.length === 5001, String(parseArchiveLine(longText).text.length))
   check('archiveLine 截断带省略号', parseArchiveLine(longText).text.endsWith('…'))
-  check('archiveLine 恰好 2000 字不截断', parseArchiveLine(archiveLine({ ts: 3, text: '字'.repeat(2000) })).text.length === 2000)
+  check('archiveLine 恰好 5000 字不截断', parseArchiveLine(archiveLine({ ts: 3, text: '字'.repeat(5000) })).text.length === 5000)
   check('archiveLine 截断后仍是单行', !longText.includes('\n'))
 
   // ============ parseArchiveLine：坏行容错 ============
@@ -210,6 +210,87 @@ try {
     return arS.stats().files === 3
   })())
   check('append 落盘行数与文件内容一致', readFileSync(join(dirS, `${day08}.jsonl`), 'utf8').trimEnd().split('\n').length === 1)
+
+  // ============ updateLast：合并转发正文补档（占位行 → 正文行） ============
+  // 场景：转发卡片入档时 message.text 是空串，正文要等 get_forward_msg 异步展开才有；
+  // 展开成功后必须**就地替换**那一行，而不是留下"一条空 + 一条正文"。
+  const dirU = join(root, 'u')
+  const uNow = new Date(2026, 3, 1, 10, 0, 0).getTime()
+  const dayU = localDay(new Date(2026, 3, 1))
+  const arU = new HistoryArchive({ dir: dirU, now: () => uNow })
+  const uFile = join(dirU, `${dayU}.jsonl`)
+  const linesOf = (file) => readFileSync(file, 'utf8').trimEnd().split('\n').filter((l) => l.trim() !== '')
+
+  // 1) 占位行 + 匹配补正文 → 单行，且正文到位
+  const placeholder = { ts: uNow, chatKey: 'g:999', userId: 7, name: '小明', kind: 'message', text: '' }
+  arU.append(placeholder)
+  const upd = arU.updateLast(
+    { ts: uNow, chatKey: 'g:999', userId: 7, name: '小明', kind: 'forward(5字)', text: '甲: 你好' },
+    { chatKey: 'g:999', ts: uNow },
+  )
+  check('updateLast 匹配时就地替换', upd.updated === true && upd.appended === false, JSON.stringify(upd))
+  check('updateLast 不新增行（仍是 1 行）', linesOf(uFile).length === 1, String(linesOf(uFile).length))
+  const uParsed = parseArchiveLine(linesOf(uFile)[0])
+  check('updateLast 正文已补进该行', uParsed.text === '甲: 你好', JSON.stringify(uParsed.text))
+  check('updateLast 保留原 ts / chatKey / userId', uParsed.ts === uNow && uParsed.chatKey === 'g:999' && uParsed.userId === 7)
+  check('updateLast 可标注 kind 区分转发', uParsed.kind === 'forward(5字)', uParsed.kind)
+
+  // 2) 不匹配（模拟期间有别的消息插队落盘）→ 绝不覆盖别人的行，退回追加
+  arU.append({ ts: uNow + 1000, chatKey: 'g:999', userId: 8, name: '小红', kind: 'message', text: '别人的消息' })
+  const upd2 = arU.updateLast(
+    { ts: uNow, chatKey: 'g:999', userId: 7, name: '小明', kind: 'forward', text: '不该覆盖' },
+    { chatKey: 'g:999', ts: uNow },   // ts 与最后一行的 uNow+1000 不符
+  )
+  check('updateLast 不匹配时退回追加', upd2.updated === false && upd2.appended === true, JSON.stringify(upd2))
+  check('updateLast 不匹配时没覆盖别人的行', parseArchiveLine(linesOf(uFile)[1]).text === '别人的消息')
+  check('updateLast 不匹配时新增了一行', linesOf(uFile).length === 3, String(linesOf(uFile).length))
+
+  // 3) chatKey 不符 → 同样退回追加（跨会话不串改）
+  arU.append({ ts: uNow + 2000, chatKey: 'g:999', userId: 9, name: 'c', kind: 'message', text: 'x' })
+  const upd3 = arU.updateLast(
+    { ts: uNow + 2000, chatKey: 'g:other', userId: 9, name: 'c', kind: 'forward', text: 'y' },
+    { chatKey: 'g:999', ts: uNow + 2000 },
+  )
+  check('updateLast chatKey 不符退回追加', upd3.updated === false && upd3.appended === true, JSON.stringify(upd3))
+
+  // 4) 目录不存在 / 空目录 → 退回追加生成本次分片（不能因为没文件就丢数据）
+  const dirU2 = join(root, 'u2')
+  const arU2 = new HistoryArchive({ dir: dirU2, now: () => uNow })
+  const upd4 = arU2.updateLast({ ts: uNow, chatKey: 'g:1', userId: 1, name: 'n', kind: 'forward', text: 'z' }, {})
+  check('updateLast 空目录时退回追加', upd4.updated === false && upd4.appended === true, JSON.stringify(upd4))
+  check('updateLast 空目录时确实落了盘', existsSync(join(dirU2, `${dayU}.jsonl`)))
+
+  // 5) 坏行/非 JSON 收尾 → 一律保守退回追加，绝不抛错
+  const dirU3 = join(root, 'u3')
+  const arU3 = new HistoryArchive({ dir: dirU3, now: () => uNow })
+  arU3.append({ ts: uNow, chatKey: 'g:2', userId: 1, name: 'n', kind: 'message', text: 'ok' })
+  appendFileSync(join(dirU3, `${dayU}.jsonl`), '{半截的坏行\n', 'utf8')
+  const upd5 = arU3.updateLast({ ts: uNow, chatKey: 'g:2', userId: 1, name: 'n', kind: 'forward', text: 'w' }, {})
+  check('updateLast 坏行收尾不抛错且退回追加', upd5.updated === false && upd5.appended === true, JSON.stringify(upd5))
+
+  // 6) 非对象入参 / 空正文 → 静默失败，绝不抛错
+  check('updateLast 非对象入参不抛错', arU.updateLast(null).updated === false)
+  check('updateLast 空正文不抛错', (() => {
+    try { arU.updateLast({ ts: uNow, chatKey: 'g:999', userId: 7, text: '   ' }, { chatKey: 'g:999', ts: uNow }); return true } catch { return false }
+  })())
+
+  // 7) 展开正文超长时沿用归档统一口径（压平空白 + 截断），仍保证单行
+  const dirU4 = join(root, 'u4')
+  const arU4 = new HistoryArchive({ dir: dirU4, now: () => uNow })
+  arU4.append({ ts: uNow, chatKey: 'g:3', userId: 1, name: 'n', kind: 'message', text: '' })
+  arU4.updateLast(
+    { ts: uNow, chatKey: 'g:3', userId: 1, name: 'n', kind: 'forward', text: `甲: 第一行\n乙: 第二行 ${'字'.repeat(5500)}` },
+    { chatKey: 'g:3', ts: uNow },
+  )
+  const u4Lines = linesOf(join(dirU4, `${dayU}.jsonl`))
+  check('updateLast 长正文仍是一行', u4Lines.length === 1, String(u4Lines.length))
+  const u4Text = parseArchiveLine(u4Lines[0]).text
+  check('updateLast 长正文压平换行', !u4Text.includes('\n') && u4Text.startsWith('甲: 第一行 乙: 第二行'))
+  check('updateLast 长正文按归档上限截断', u4Text.length === 5001 && u4Text.endsWith('…'), String(u4Text.length))
+
+  // 8) 补档后可被 /找 检索到（这就是本次修复的最终目的）
+  const found = arU.search('你好', { days: 7, chatKey: 'g:999' })
+  check('updateLast 补进正文后 /找 能命中', found.hits.length >= 1 && found.hits.some((h) => h.text === '甲: 你好'), JSON.stringify(found.hits.map((h) => h.text)))
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
