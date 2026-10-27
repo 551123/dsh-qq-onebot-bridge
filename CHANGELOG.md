@@ -1,5 +1,36 @@
 # 更新日志 / Changelog
 ## v0.7 系列 —— 实验性与扩展 / Experimental & Extensions
+### v0.7.6（2026-10-27）— 给补丁作者收尾的三件小事
+
+> 来源：issue #4 作者跟到 0.7.5 之后的回帖。他那边删掉了两条重复实现、只剩一个开关，这版把那一个开关也收进上游。
+
+#### 一、`splitSegments(segments, limit, options)`：加 `punctuation` 开关
+
+他的 `config.splitLongReplies` 需要一个"关掉按标点断句"的入口，但我们的函数签名不给他位置传，
+只能自己改我们的函数——这是他为 0.7.5 保留的**最后一条编辑**。现在上游支持：
+
+```js
+splitSegments(segments, limit)                          // 默认：句末 → 句内 → 硬切
+splitSegments(segments, limit, { punctuation: false })  // 退回旧的纯字符硬切
+```
+
+默认行为不变（不传第三个参数时完全一致），所以他自己那条编辑可以删了。
+
+#### 二、README 社区链接跟到最新 tag，并写死"链接约定"
+
+`patches/0.7.4/ext` → **`patches/0.7.5/ext`**。同时把作者确认过的约定写进 README，免得以后每次都要问：
+
+> 分支永远叫 `patches/<我们的 tag>`、`ext/` 永远在分支根目录；**分支里是 1 个提交还是十几个都不影响这个地址**。
+
+#### 三、约定：会让人重锚的改动，CHANGELOG 里点一句
+
+他的补丁库靠"在 pristine 的某处唯一字符串上替换"定位，`lib/bridge.js` **顶部 import 块**一动锚点就没了
+（0.7.5 加 `randomUUID` 那次他就被迫重锚了一条）。所以他只提了一个要求：**这类改动在 CHANGELOG 里点一句就行，不用迁就他**。
+这条已经写进 README 的「关于 fork」小节，以后我们照做。
+
+单测：`taint-unit` 27 → **29 条**（`punctuation: false` 退回硬切、默认行为不变）。
+全量 **62 套 / 4118 断言全绿**。
+
 ### v0.7.5（2026-10-27）— 第三方要的五件事
 
 > 来源：issue #4 作者第二次回帖（他把 0.7.4 的补丁重新锚定完，报了四条实测 + 一个提议）。

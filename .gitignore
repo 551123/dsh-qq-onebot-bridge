@@ -43,3 +43,6 @@ qq-replay/
 qq-trash/
 qq-history/
 qq-files/
+
+# npm pack 产物（0.7.6 起）：发布前打出来的 tarball 不进仓库
+*.tgz

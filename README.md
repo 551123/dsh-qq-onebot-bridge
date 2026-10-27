@@ -352,10 +352,12 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 
 ### 第三方扩展（社区）
 
-- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.4/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.4/ext)** ——
+- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.5/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.5/ext)** ——
   第一个真正用 `registerToolProvider` 的插件集：小屋 / 页面与笔记 / 工作区 / 表情四个包、20 个工具，
   按我们的 tag 维护，`ext/README.md` 里写了安装方式与五条硬约束（`file://` 解析、标准 JSON Schema、同步返回、状态放模块级…）。
   **由作者本人维护，不在本项目的支持范围内**；这里只做指路，出问题请去他仓库提。
+  链接约定（作者与他约定的，写在这里免得每次都要问）：**分支永远叫 `patches/<我们的 tag>`、`ext/` 永远在分支根目录**，
+  所以这条链接只需跟着最新 tag 改；分支里是 1 个提交还是十几个，都不影响这个地址。
 
 ### 兼容承诺（我们怎么改这些接口）
 
@@ -380,6 +382,9 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
   想贡献就开 issue 或 PR（小改动直接 PR 最快）；想长期维护一条自己的线也完全没问题——按我们的 tag rebase 即可。
   我们不会去抄你的提交历史，但**想法可以取**（v0.7.4 的「污点窗口」就来自 issue #4 作者的补丁分支）。
 - 装的时候认准**本仓库或 npm 包**，别从任意 fork 装——里面的代码可能被改过，而 README 与 CHANGELOG 只描述这条线。
+- **给"按字面锚点做补丁"的人**：我们重构不会为兼容放慢，但会在 CHANGELOG 里点出来——
+  尤其是 `lib/bridge.js` **顶部的 import 块**、以及某个函数被**整块重写**这种会让人重锚的改动。
+  （这条是 issue #4 作者要求的：他的补丁库靠"在 pristine 的哪个唯一字符串处替换"定位，import 一动锚点就没了。）
 
 ## 命令与调试
 
@@ -520,10 +525,10 @@ npm run control            # 或 node control/bin/qq-control.mjs --open
 
 最近五个版本（始终滚动展示）：
 
+- **v0.7.6** — 「给补丁作者收尾的三件小事」：① **`splitSegments(segments, limit, { punctuation: false })`** —— 给"不想按标点断句"的调用方一个开关（默认仍三级：句末 → 句内 → 硬切），issue #4 作者为 0.7.5 保留的最后一条编辑因此可以删；② README 社区链接跟到 **`patches/0.7.5/ext`**，并写死约定「分支永远叫 `patches/<我们的 tag>`、`ext/` 永远在根目录，里面几个提交不影响地址」；③ 立一条约定：**会让人重锚的改动（`lib/bridge.js` 顶部 import、整块重写）在 CHANGELOG 里点一句** ——他靠字面锚点定位，不改他迁就、只要知道。
 - **v0.7.5** — 「第三方要的五件事」：① **`api.instanceId`**（每实例一个随机串）—— 宿主重建桥后第三方直接比 id，不用再靠 `toolProviders()` 前缀 + 轮询猜（作者实测轮询会误判、也会漏掉快速切换）；② **provider 出问题不再静默**：返回里的 `reason` 记进 trace，抛错时**带上调用栈首帧**（`body.mjs:42:9`）；③ **污点事件带 `data.source`**（`inbound-injection`），避免和第三方的 taint 同名混着；④ **断句补二级回退**：句末（60% 窗口）找不到 → 句内标点（50%，`，,、）)」』：:`）→ 才硬切，中文长句不再挤成一坨；⑤ README 加「**第三方扩展（社区）**」指路（四个包 / 20 工具，注明作者维护、不指文件只指目录）。
 - **v0.7.4** — 「断句 · 白名单时机 · 污点窗口」：① **长回复按句子分批**——`splitSegments` 以前只按字符数硬切（常把一句话劈成两半），现在优先在句末标点后断开、找不到标点才硬切，拼回来一字不差；② 面板写清**白名单在建会话之前就拦下**（不在名单里的会话根本不会创建，所以不会"回一句拒绝"，排查看 `/为什么`）；③ **污点窗口（实验性，默认关）**：入站文本命中注入句式（`忽略之前所有指令`、`ignore all previous instructions`、`输出你的系统提示词`…）时给该会话打限时标记，窗口内（默认 30 分钟，可配 1–1440）**文本/图片/文件/语音/撤回/贴表情一律降级为 dry-run**，问答照常；打标与**每次拦截**都写 trace，出口返回 `ok:false` 并写明原因，面板状态行显示"几个会话正在被拦"，`clearTaint()` 可手动解除。随手修掉 3 个真 BUG：媒体工具被拦时仍报 `sent:true`、`/取 文件` 没发出去却回"✅ 已发到私聊"、出口被拦只给笼统原因。新增 `test/taint-unit.mjs`（25 条），面板 80 → **82 键**；全量 **62 套 / 4110 断言全绿**
 - **v0.7.3** — 「把外部插件的坑吃进上游」：issue #4 作者放出 `patches/0.7.0`（22 提交、三个 `ext/` 包真在用 `registerToolProvider`），读完改了三处。① **包导出 `/extension` 入口**：以前第三方拿出口只能按 `file://` 绝对路径 import `lib/extension.js`（他的包还为此写了 `QQBRIDGE_EXT_PATH` 兜底），现在 `import { getExtensionApi } from 'dsh-qq-onebot-bridge/extension'` 直接可用；② **provider 的 context 补 `workspaceRoot` / `extensionVersion`**：他按出口形状假设有 `workspaceRoot`，上游却从没给过，等于静默 undefined；③ README 补四条 provider 规矩——**参数必须是标准 JSON Schema**（`required: true` 会被宿主直接拒，要顶层数组）、**状态别放 `apply` 里**（live reload 复用模块实例）、**注册随桥实例消亡**（要自己重挂）、**改 JS 要重启宿主**（改 config 才会热重载）。
 - **v0.7.1** — 「上限与文档：听外部使用者的」：issue #4 作者真的用起来了（把 17 个工具拆成三个包挂上来），撞出两件事。① **工具上限 8 → 16**（总 24 → 40）：他那个包**正好 8 个**，再加一个就得为一个工具拆包 —— 外部使用者正好卡在线上说明线画低了；**提示段仍是 4/12 不动**（那才是每条消息的固定成本）。② README 补两条"写 provider 的坑"：**不要改写 `agentCtx.tools`**（它是宿主共享 Service，赋值会顺着 cordis setter 落到进程级 ToolRuntime，**所有** agent 一起被改且无警告；正确做法是 `Object.create` 造视图 + 只 `defineProperty` 一个 `register` + Proxy 只拦 `tools`）；`tools.restrict({allow})` 是**逐名字**白名单，没点名的工具会**静默消失**（连 `web_search` 都会），要收窄优先用 `deny`。单测 `extension-unit` 46 → **50 条**；全量 **61 套 / 4079 断言全绿**
-- **v0.7.0** — 「实验性与扩展」：把 0.6.x 里评估过但没做的扩展点，以**实验性、默认关**的方式放回来。① **实例出口 `ctx.qqBridge`**：`sendText/sendImage/sendFile/sendVoice` 以桥的身份发消息，**复用原有护栏**（出站限流 / 注入抑制 / 路径解析 / ActionGate 配额 / TTS 检查）**并额外检查目标是否在白名单**；另有只读快照 `sessions()/agents()/config()`（副本，密钥类键抹掉）。每次出口发送都进 trace。② **只读事件 `qqbridge:inbound` / `qqbridge:outbound`**：只能观察、不能改写/拦截；入站事件在白名单/静默/去重之后发出，出站事件在真的发出去之后发出并带 `kind`。③ **实验性工具 provider 链**（`registerToolProvider`，默认关 `extensionToolsEnabled`）：第三方往每个会话注入工具与提示段——只能**新增**不能覆盖内置、抛错只跳过它自己、有条数上限、注入内容全部进 trace；面板新增「实验性（EXPERIMENTAL）」组。新增 `test/extension-unit.mjs`（46 条），面板 78 → **79 键**；全量 **61 套 / 4075 断言全绿**
 
 **更早的版本（v0.4 线及之前）见 [CHANGELOG.md](CHANGELOG.md)** —— 完整历史、每个版本的缺陷清单与测试计数都在那里。
