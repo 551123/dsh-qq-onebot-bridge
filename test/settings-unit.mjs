@@ -132,11 +132,11 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 82 = 66 开关 + 12 数值 + 1 时段 + 3 名单）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 83 = 67 开关 + 12 数值 + 1 时段 + 3 名单）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 82
-  && boolRows.length === 66 && numRows.length === 12
+  && allRows.length === 83
+  && boolRows.length === 67 && numRows.length === 12
   && allRows.filter((entry) => entry.type === 'times').length === 1
   && allRows.filter((entry) => entry.type === 'list').length === 3,
   `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length} / 共 ${allRows.length}`)
