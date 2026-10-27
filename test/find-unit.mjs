@@ -604,6 +604,21 @@ const MISS = '我先去睡觉了明天见'
   t.stop()
 }
 
+// 20b. NapCat 4.18.28 的真实返回形状：**裸数组** [{ text, pt1..pt4, charBox, score }, …]
+//      （上游只认 { texts: [{ text }] }，真机实测恒回「（这张图没识别出文字）」→ 本地补丁 9）
+{
+  const t = makeBridge()
+  const imgPath = join(t.cwd, 'array-shape-pic.png')
+  writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+  t.server.ocrResult = [
+    { text: '数组形状的第一行', pt1: { x: '1', y: '1' }, pt2: { x: '2', y: '1' }, pt3: { x: '2', y: '2' }, pt4: { x: '1', y: '2' }, charBox: [], score: '' },
+    { text: '数组形状的第二行', pt1: { x: '1', y: '3' }, pt2: { x: '2', y: '3' }, pt3: { x: '2', y: '4' }, pt4: { x: '1', y: '4' }, charBox: [], score: '' },
+  ]
+  const reply = await t.send(t.groupMessage('/ocr', { images: [{ file: imgPath }] }))
+  check('D20b 裸数组（NapCat 真实形状）也能识别', reply.includes('数组形状的第一行') && reply.includes('数组形状的第二行'), brief(reply))
+  check('D20b 不再回「没识别出文字」', !reply.includes('没识别出文字'), brief(reply))
+  t.stop()
+}
 // ===========================================================================
 // E. /文件 与 /取
 // ===========================================================================

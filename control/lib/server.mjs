@@ -178,6 +178,42 @@ export function createControlServer({ config, token, api, ui = '', saveConfig = 
         json(response, 200, await api.jobsView())
         return
       }
+      // 补丁 15「工具参考」页：只读，数据全部来自文件（目录/表/会话键）。
+      if (request.method === 'GET' && path === '/api/qq-tools') {
+        if (typeof api.qqTools !== 'function') {
+          json(response, 200, { ok: false, reason: '当前控制台不支持工具参考页' })
+          return
+        }
+        json(response, 200, await api.qqTools())
+        return
+      }
+      // 补丁 17「用量与花费」页：只读，数据来自桥写的汇总文件。
+      if (request.method === 'GET' && path === '/api/qq-usage') {
+        if (typeof api.qqUsage !== 'function') {
+          json(response, 200, { ok: false, reason: '当前控制台不支持用量与花费页' })
+          return
+        }
+        json(response, 200, await api.qqUsage())
+        return
+      }
+      // 补丁 28「插件能力」页：C 组 + B 组表文件（读与写都进 supervisor，这里只做路由）。
+      if (request.method === 'GET' && path === '/api/qq-caps') {
+        if (typeof api.qqCaps !== 'function') {
+          json(response, 200, { ok: false, reason: '当前控制台不支持插件能力页' })
+          return
+        }
+        json(response, 200, await api.qqCaps())
+        return
+      }
+      // 补丁 56「人设正文」：读/写插件根的 qq-persona.txt（写入在 supervisor，这里只做路由）。
+      if (request.method === 'GET' && path === '/api/persona') {
+        if (typeof api.personaRead !== 'function') {
+          json(response, 200, { ok: false, reason: '当前控制台不支持人设正文页' })
+          return
+        }
+        json(response, 200, await api.personaRead())
+        return
+      }
       if (request.method === 'GET' && path === '/api/groups') {
         if (typeof api.groups !== 'function') {
           json(response, 200, { ok: false, reason: '当前控制台不支持群配置页' })
