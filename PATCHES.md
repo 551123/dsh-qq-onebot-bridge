@@ -23,7 +23,7 @@
 
 | 项 | 数量 |
 | --- | --- |
-| 提交 | 20（`.gitattributes` + 18 条补丁 + `ext/`）；加上写本文件的那个提交是 21 |
+| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 18 条补丁（各一个提交）+ `ext/`；本文件的每次修订再加一个提交。总数以 `git rev-list --count v0.7.5..HEAD` 为准 |
 | 改动文件（不含 `ext/`） | 20 个改动 + `.gitattributes` |
 | `ext/` | 4 个包 / 13 个文件（每包 `index.js` + `body.mjs` + `package.json`，外加 `README.md`） |
 | 增删行（不含 `ext/` 与本文） | **+10 703 / −1 663**，21 个文件 |
@@ -124,7 +124,7 @@ node -e "console.log(require('./package.json').version)"              # 0.7.5（
 
 ## 6. 已知限制
 
-1. **版本绑定是「快照」**：这些编辑锚在 v0.7.5 的源码文本上，升级靠**补丁库重锚**（`tools/reanchor.mjs` 预演 → `apply-forward-archive-patch.mjs --verify` 看「可应用/已就位/阻塞」），不是 `git rebase`。上游改了同一区域，仍要人读一遍「阻塞」那几条。
+1. **版本绑定是「锚点」**：这些编辑锚在 v0.7.5 的源码文本上（字面串，不是 diff 上下文）。升级的权威路径是**补丁库重锚**（`tools/reanchor.mjs` 预演 → `apply-forward-archive-patch.mjs --verify` 看「可应用/已就位/阻塞」），再 `fork-export` 重导本分支；`git rebase` 只是重导之后的一个可选动作，锚点撞车时它帮不上忙（工作树里没有「编辑意图」，只有文本）。上游改了同一区域，仍要人读一遍「阻塞」那几条。
 2. **`ext/` 的出口地址**：包要 import 桥的出口，而不同版本 `package.json` 的 `exports` 覆盖面不同。优先 `import('dsh-qq-onebot-bridge/extension')`（0.7.4 的 exports 已含它），解析失败再按兄弟包 `file://` 绝对地址兜底，环境变量 `QQBRIDGE_EXT_PATH` 始终最优先（普通路径或 `file://` 都收）。
 3. `qq-tools.json` 的过滤只作用于桥建立的会话，管不到别的插件注册的工具；`ext/` 的工具也**不吃**这张表，要按包禁用就用各自的 config 键或干脆不 insert。
 4. 记忆与历史归档**不按群隔离**（`memory-index/` 与归档目录是全局的），只有一个提示层规则要求模型注明来源。
@@ -134,9 +134,17 @@ node -e "console.log(require('./package.json').version)"              # 0.7.5（
 
 ## 7. 提交清单（`v0.7.5..HEAD`）
 
-| # | 提交 | 内容 |
+由 `tools/fork-export.mjs` 从补丁库逐条生成，一条补丁一个提交（提交总数以 `git rev-list --count v0.7.5..HEAD` 为准 —— 本文件自己每改一次就多一个提交，写死数字必然自相矛盾）：
+
+| 序 | 提交 | 内容 |
 | --- | --- | --- |
-| 1 | HEAD | `feat: 157 条本地补丁重锚到 v0.7.5` —— 补丁库 18 条 / 157 编辑 / 20 文件一次性重导；含 `ext/` 四个包与本文 |
+| 首 | `chore: 钉住 LF` | `.gitattributes`（`* -text`）—— 系统级 `core.autocrlf=true`，只有仓库自己能钉住行尾 |
+| 中 | `patch-NN: …` | 18 条补丁，各自一条提交，标题带补丁名（归档转发 / 人设记忆 / 群内交互 / 工具接线 / … / 表情段） |
+| 后 | `feat(ext): 四个 provider 扩展包（20 工具）与使用说明` | `ext/` 13 个文件，从 `patches/0.7.4` 带过来 |
+| 后 | `docs: 分支说明（0.7.5 口径）` | 本文件首次落地 |
+| 后 | `docs: …` | 本文件的历次修订（规模回填、形态判据等） |
+
+**这个形状每次换版可能变**（0.7.0 逐条 17 提交 → 0.7.4 单提交快照 → 0.7.5 回逐条 18 条补丁各一提交）。判据只有一条：`fork-export` 逐条能不能干净落在上游 tag 上；撞在上游重写过我们插桩的段落、且会级联才降级成单提交，并在补丁器那边记原因。链接与仓库结构（分支名、`ext/` 位置）不受形状影响。
 
 `patches/0.7.4`（父 `18e1f77`，单提交 `984006c`，159 编辑）整条保留作为归档，不再前进。
 
@@ -146,7 +154,7 @@ node -e "console.log(require('./package.json').version)"              # 0.7.5（
 > 真值在补丁器的 `upstream-installed.json`：`fork.commit`（完整 sha）与 `fork.remote["patches/0.7.5"]`；
 > 自己看：`git -C <本仓库> rev-parse patches/0.7.5`。
 
-提交信息里保留了本地补丁库的历史编号（`patch-XX`），只是为了对照；单提交形态下已没有「提交之间」的顺序可言，要拆某一条请回补丁库改 JSON 再重导。
+提交信息里保留了本地补丁库的历史编号（`patch-XX`）以便对照。**改法一律是「改补丁库 JSON → 重跑 `fork-export`」**，不在本分支上手改源码：手改的差异下次重导就没了，而且会让 `fork 树 == 线上树` 这项门禁失去意义。
 
 ## 8. 0.7.5 这一版的差异（相对 0.7.4 线）
 
@@ -161,6 +169,7 @@ node -e "console.log(require('./package.json').version)"              # 0.7.5（
 
 1. 每次跟上上游发版，分支名就是 `patches/<上游 tag>`（这一版是 `patches/0.7.5`），父提交就是该 tag 解引用出来的 commit；
 2. `ext/` 永远在分支根目录下，四个包的目录名不变（`qq-ext-face` / `qq-ext-house-lite` / `qq-ext-page-note` / `qq-ext-workspace`）；
-3. 所以上游每次发版只需要把链接里的 tag 改一下，不用改路径结构。
+3. 所以上游每次发版只需要把链接里的 tag 改一下，不用改路径结构；
+4. **分支里的提交数会变，链接不会跟着变** —— 逐条提交还是单提交快照取决于当次 `fork-export` 能否逐条干净落地（见 §7 末段），那条分支名和 `ext/` 位置是稳定的契约。
 
 要指就指到 `.../tree/patches/0.7.5/ext` 这个**目录**，别指具体文件 —— 实现文件名会变。
