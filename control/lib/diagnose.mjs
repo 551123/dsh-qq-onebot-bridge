@@ -34,7 +34,15 @@ export function runDiagnose({ config, snapshot, runtime, events = [], now = Date
   checks.push(item('dsh', 'DSH 宿主入口 bin.js', config?.dshBin && exists(config.dshBin), config?.dshBin || '未探测到', '用 --print-config 检查探测结果，或手动设置 dshBin'))
   checks.push(item('napcat-bat', 'NapCat 启动脚本', config?.napcatBat && exists(config.napcatBat), config?.napcatBat || '未探测到',
     '设置 napcatBat，或先安装 NapCat（填 bootmain\\launcher.bat，别填 napcat.bat：那个在这版只是拉起加载器 + pause）', 'warn'))
-  checks.push(item('cwd', '宿主工作目录', Boolean(config?.cwd) && exists(config.cwd), config?.cwd || '未设置', '设置 cwd（宿主与桥都在这个目录读写日志/状态）'))
+  // 控制台 cwd 与桥 cwd 不一致时，运行快照 / 日志 / 能力表全会读错地方 —— 这一项必须判红，
+  // 并把"桥实际用哪个目录"直接写进 detail，别让人自己猜。
+  const normPath = (value) => String(value ?? '').replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase()
+  const cwdMismatch = Boolean(config?.cwd && config?.bridgeCwd) && normPath(config.cwd) !== normPath(config.bridgeCwd)
+  checks.push(item('cwd', '宿主工作目录', Boolean(config?.cwd) && exists(config.cwd) && !cwdMismatch,
+    (config?.cwd || '未设置') + (cwdMismatch ? `（桥实际用的是 ${config.bridgeCwd}）` : ''),
+    cwdMismatch
+      ? `桥把运行快照 / 日志 / 能力表都写在 ${config.bridgeCwd}，控制台却在看 ${config.cwd} → 在「配置」里点「用桥的目录」`
+      : '设置 cwd（宿主与桥都在这个目录读写日志/状态）'))
 
   // ---- 端口 ----
   const host = row('host')
