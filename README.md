@@ -311,6 +311,10 @@ ctx.qqBridge.registerToolProvider(({ agentCtx, route, key, config, workspaceRoot
 // ④ 拿不到 ctx 时（插件加载顺序 / 独立进程）：包导出了入口，别再写 file:// 绝对路径
 import { getExtensionApi } from 'dsh-qq-onebot-bridge/extension'
 const api = getExtensionApi()
+
+// ⑤ 桥实例标识：宿主重建桥（重启 / 热重载 / 面板点开关）后这个值会变，
+//    第三方据此判断"我注册的 provider 还在不在原实例上"，不用靠轮询猜
+if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegister() }
 ```
 
 - **发送一律复用原有护栏**（出站限流 / 注入抑制 / 分段 / 合并转发 / 路径解析 / ActionGate 配额 / TTS 可用性），
@@ -345,6 +349,13 @@ const api = getExtensionApi()
   ④ **改 JS 要重启宿主**：改 `cordis.patch.yml` 的 config 会触发热重载（重跑 `apply`），但改 `index.js`
      本身不会重新 import —— 常见做法是把工具实现放在 `body.mjs`，每次 `apply` 带时间戳重新 import 它。
 - 不做的事（评估过）：**出站内容改写 / 可拦截事件**（等于开"替机器人说话""静默吞消息"的旁路）、多账号多实例、向量记忆。
+
+### 第三方扩展（社区）
+
+- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.4/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.4/ext)** ——
+  第一个真正用 `registerToolProvider` 的插件集：小屋 / 页面与笔记 / 工作区 / 表情四个包、20 个工具，
+  按我们的 tag 维护，`ext/README.md` 里写了安装方式与五条硬约束（`file://` 解析、标准 JSON Schema、同步返回、状态放模块级…）。
+  **由作者本人维护，不在本项目的支持范围内**；这里只做指路，出问题请去他仓库提。
 
 ### 兼容承诺（我们怎么改这些接口）
 
@@ -509,10 +520,10 @@ npm run control            # 或 node control/bin/qq-control.mjs --open
 
 最近五个版本（始终滚动展示）：
 
+- **v0.7.5** — 「第三方要的五件事」：① **`api.instanceId`**（每实例一个随机串）—— 宿主重建桥后第三方直接比 id，不用再靠 `toolProviders()` 前缀 + 轮询猜（作者实测轮询会误判、也会漏掉快速切换）；② **provider 出问题不再静默**：返回里的 `reason` 记进 trace，抛错时**带上调用栈首帧**（`body.mjs:42:9`）；③ **污点事件带 `data.source`**（`inbound-injection`），避免和第三方的 taint 同名混着；④ **断句补二级回退**：句末（60% 窗口）找不到 → 句内标点（50%，`，,、）)」』：:`）→ 才硬切，中文长句不再挤成一坨；⑤ README 加「**第三方扩展（社区）**」指路（四个包 / 20 工具，注明作者维护、不指文件只指目录）。
 - **v0.7.4** — 「断句 · 白名单时机 · 污点窗口」：① **长回复按句子分批**——`splitSegments` 以前只按字符数硬切（常把一句话劈成两半），现在优先在句末标点后断开、找不到标点才硬切，拼回来一字不差；② 面板写清**白名单在建会话之前就拦下**（不在名单里的会话根本不会创建，所以不会"回一句拒绝"，排查看 `/为什么`）；③ **污点窗口（实验性，默认关）**：入站文本命中注入句式（`忽略之前所有指令`、`ignore all previous instructions`、`输出你的系统提示词`…）时给该会话打限时标记，窗口内（默认 30 分钟，可配 1–1440）**文本/图片/文件/语音/撤回/贴表情一律降级为 dry-run**，问答照常；打标与**每次拦截**都写 trace，出口返回 `ok:false` 并写明原因，面板状态行显示"几个会话正在被拦"，`clearTaint()` 可手动解除。随手修掉 3 个真 BUG：媒体工具被拦时仍报 `sent:true`、`/取 文件` 没发出去却回"✅ 已发到私聊"、出口被拦只给笼统原因。新增 `test/taint-unit.mjs`（25 条），面板 80 → **82 键**；全量 **62 套 / 4110 断言全绿**
 - **v0.7.3** — 「把外部插件的坑吃进上游」：issue #4 作者放出 `patches/0.7.0`（22 提交、三个 `ext/` 包真在用 `registerToolProvider`），读完改了三处。① **包导出 `/extension` 入口**：以前第三方拿出口只能按 `file://` 绝对路径 import `lib/extension.js`（他的包还为此写了 `QQBRIDGE_EXT_PATH` 兜底），现在 `import { getExtensionApi } from 'dsh-qq-onebot-bridge/extension'` 直接可用；② **provider 的 context 补 `workspaceRoot` / `extensionVersion`**：他按出口形状假设有 `workspaceRoot`，上游却从没给过，等于静默 undefined；③ README 补四条 provider 规矩——**参数必须是标准 JSON Schema**（`required: true` 会被宿主直接拒，要顶层数组）、**状态别放 `apply` 里**（live reload 复用模块实例）、**注册随桥实例消亡**（要自己重挂）、**改 JS 要重启宿主**（改 config 才会热重载）。
 - **v0.7.1** — 「上限与文档：听外部使用者的」：issue #4 作者真的用起来了（把 17 个工具拆成三个包挂上来），撞出两件事。① **工具上限 8 → 16**（总 24 → 40）：他那个包**正好 8 个**，再加一个就得为一个工具拆包 —— 外部使用者正好卡在线上说明线画低了；**提示段仍是 4/12 不动**（那才是每条消息的固定成本）。② README 补两条"写 provider 的坑"：**不要改写 `agentCtx.tools`**（它是宿主共享 Service，赋值会顺着 cordis setter 落到进程级 ToolRuntime，**所有** agent 一起被改且无警告；正确做法是 `Object.create` 造视图 + 只 `defineProperty` 一个 `register` + Proxy 只拦 `tools`）；`tools.restrict({allow})` 是**逐名字**白名单，没点名的工具会**静默消失**（连 `web_search` 都会），要收窄优先用 `deny`。单测 `extension-unit` 46 → **50 条**；全量 **61 套 / 4079 断言全绿**
 - **v0.7.0** — 「实验性与扩展」：把 0.6.x 里评估过但没做的扩展点，以**实验性、默认关**的方式放回来。① **实例出口 `ctx.qqBridge`**：`sendText/sendImage/sendFile/sendVoice` 以桥的身份发消息，**复用原有护栏**（出站限流 / 注入抑制 / 路径解析 / ActionGate 配额 / TTS 检查）**并额外检查目标是否在白名单**；另有只读快照 `sessions()/agents()/config()`（副本，密钥类键抹掉）。每次出口发送都进 trace。② **只读事件 `qqbridge:inbound` / `qqbridge:outbound`**：只能观察、不能改写/拦截；入站事件在白名单/静默/去重之后发出，出站事件在真的发出去之后发出并带 `kind`。③ **实验性工具 provider 链**（`registerToolProvider`，默认关 `extensionToolsEnabled`）：第三方往每个会话注入工具与提示段——只能**新增**不能覆盖内置、抛错只跳过它自己、有条数上限、注入内容全部进 trace；面板新增「实验性（EXPERIMENTAL）」组。新增 `test/extension-unit.mjs`（46 条），面板 78 → **79 键**；全量 **61 套 / 4075 断言全绿**
-- **v0.6.9** — 「查得到 · 找得到 · 引得到」：三件"少一次翻找"的小事。① **`/为什么`**（新命令）：引用那条消息发 `/为什么`（或 `/为什么 <消息id>`、不带参数查最近一条；口语「为什么没回」也认），把 trace 决策链翻成人话——`收到消息✅ → 白名单✅ → 静默时段⛔` + 「卡在「静默时段」：避开高峰期静默中（09:00-12:00）」；四种形状都有人话结论（被拦 / 一路通过并回复 / 走到模型没出站回复 / 被命令等前置分支处理，不会误报"没回复"），群里仅管理员可用、不回显原文。翻译逻辑抽成 `summarizeTrace()`，口语识别在 `lib/why.js`（整句才命中，带别的话照常交给模型）。② **面板搜索框**：按中文标签 / 配置键名 / 说明过滤（纯前端，不发请求不改配置），命中组的整组保留、否则只留命中的行，搜索时「进阶」组自动展开，顶部显示「匹配 N 组 / M 行」，无命中给"换个词"提示。③ **回复带引用**（`quoteReplyEnabled`，默认关，**只作用于群聊**）：打开后群回复第一批带 QQ 原生 `reply` 段；引用失败（撤回 / ID 过期 / 客户端不支持）自动去掉引用重发一次；注入回放与无 messageId 不挂引用。出站有两条路径（命令 `#reply()` 与模型 `assistant/message`），两条都统一过 `#quoteFor()` —— 第一版漏了模型路径，真机回归补上。新增 `test/why-unit.mjs`（17 条）与 `test/quote-unit.mjs`（11 条），`settings-unit` 267 → **271**，面板 77 → **78 个键**；全量 **60 套 / 4020 断言全绿**
 
 **更早的版本（v0.4 线及之前）见 [CHANGELOG.md](CHANGELOG.md)** —— 完整历史、每个版本的缺陷清单与测试计数都在那里。

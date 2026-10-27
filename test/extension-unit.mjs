@@ -105,6 +105,23 @@ check('★出口对象形状稳定：版本/事件名/四个发送器/三个快�
   && ['sessions', 'agents', 'config', 'on', 'registerToolProvider', 'toolProviders'].every((name) => typeof api[name] === 'function'),
   brief(Object.keys(api)))
 check('同一个桥只建一次出口（身份稳定）', bridge.createExtensionApi() === api)
+/**
+ * ★ v0.7.5（issue #4 作者要求）：`api.instanceId` —— 每个桥实例一个随机串。
+ *   他原来靠 `toolProviders()` 前缀 + 5 秒轮询猜"出口换人了没"，热重载窗口会误判、也会漏掉快速切换。
+ *   有了 id 直接比；同一实例稳定，不同实例必须不同。
+ */
+check('★出口带 instanceId：同一实例稳定，且与 extensionReport 一致',
+  typeof api.instanceId === 'string' && api.instanceId.length >= 8
+  && bridge.createExtensionApi().instanceId === api.instanceId
+  && bridge.extensionReport().instanceId === api.instanceId,
+  String(api.instanceId))
+check('★不同桥实例的 instanceId 不同（宿主重建后据此重挂）',
+  (() => {
+    const other = new QQBridge(ctx, config, new MockServer(), { info() {}, warn() {}, error() {} })
+    const otherId = other.createExtensionApi().instanceId
+    other.stop()
+    return typeof otherId === 'string' && otherId !== api.instanceId
+  })())
 
 // ---- ② 入站事件 ----
 const inbound = []
@@ -268,6 +285,35 @@ check('provider 名与贡献条数进 notes（给 trace 用）',
   collected.notes.some((note) => /provider「good」注册了 1 个工具 \/ 1 段提示/.test(note))
   && collected.notes.some((note) => /provider「empty」没有贡献/.test(note)),
   brief(collected.notes))
+/**
+ * ★★ v0.7.5（他踩的坑）：provider 里 `catch { return { tools: [], sections: [], reason } }` ——
+ *   我们原来只读 tools/sections，`reason` 被扔掉，于是"包挂了"表现为"注册成功但零工具"，比抛错难查。
+ *   现在：① 返回里的 `reason` 记进 notes；② 抛错时带上调用栈首帧（哪个文件哪一行）。
+ */
+check('★★provider 返回里的 reason 会被记进 notes（不再静默零工具）',
+  (() => {
+    const out = collectProviderAdditions({
+      providers: [{ name: 'hut', fn: () => ({ tools: [], sections: [], reason: '小屋目录没配置' }) }],
+      builtinNames: BUILTIN_TOOL_NAMES,
+    })
+    return out.notes.some((note) => /provider「hut」报告：小屋目录没配置/.test(note))
+  })())
+check('★★provider 抛错时记下调用栈首帧（能看出哪个文件炸的）',
+  (() => {
+    const out = collectProviderAdditions({
+      providers: [{
+        name: 'bomb',
+        fn: () => {
+          const error = new Error('body 炸了')
+          error.stack = 'Error: body 炸了\n    at provider (/repo/ext/qq-ext-x/body.mjs:42:9)\n    at collect (node:internal/x:1:1)'
+          throw error
+        },
+      }],
+      builtinNames: BUILTIN_TOOL_NAMES,
+    })
+    const item = out.skipped.find((entry) => entry.provider === 'bomb')
+    return item !== undefined && /body\.mjs:42/.test(item.where ?? '') && !/node:internal/.test(item.where ?? '')
+  })())
 
 // 上限：一个 provider 塞太多工具会被截断
 const many = collectProviderAdditions({
