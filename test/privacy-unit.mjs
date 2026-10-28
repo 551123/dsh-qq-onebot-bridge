@@ -220,16 +220,39 @@ check('没有硬编码的本机用户名/家目录路径', pathHits.length === 0
 // 的虚构示例（`X:\qq-history`、`D:\evil`、`C:\NapCat\…`、`D:/voice/…` 都不存在）。
 // 例外：操作系统自带路径（`C:\Windows\`、`C:\Program Files\`）不含个人信息。
 const OS_PATH_ALLOW = [/^C:[\\/]Windows[\\/]/i, /^C:[\\/]Program Files(?: \(x86\))?[\\/]/i]
+/**
+ * ★ v0.7.9（issue #4 作者实测反馈）：**文档里明确写成"示例"的路径要豁免**。
+ *
+ * 原来的判据是"这个盘符路径在本机存在 ⇒ 红"。它对"作者把自家真实路径写进文档"是有效的，
+ * 但它把**测试结果和运行环境绑在一起**：README 里举的示例（TTS 参考音频、宿主错误日志）
+ * 只要读者机器上恰好有同名文件，套件就红——他的机器上就有 `D:\qq-work\qq-host-err.log`。
+ *
+ * 这属于测试缺陷，不是他的环境问题。处理方式：
+ *   ① 示例路径尽量改成**不含盘符**的可移植写法（`%LOCALAPPDATA%\qq-host-err.log`，已改）；
+ *   ② 剩下确实需要盘符的示例，在这里显式列出并写明"这是文档示例"，仍然逐个豁免；
+ *   ③ 清单只允许放**文档示例**，不许拿它盖真实泄露——所以在下面单独断言"清单很短"。
+ */
+const DOCUMENTED_EXAMPLE_PATHS = [
+  'D:/voice/xiaojingyu.wav',        // schema 里 ttsLocalRefAudio 的示例值（README 也引用了）
+  'D:/qq-work/qq-host-err.log',     // 0.7.8 及更早 README 的宿主错误日志示例（现已改成 %LOCALAPPDATA%）
+]
+const normalizePathForCompare = (value) => String(value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+const DOCUMENTED_EXAMPLES = new Set(DOCUMENTED_EXAMPLE_PATHS.map(normalizePathForCompare))
 const DRIVE_PATH = /(?:^|[^\w:/])([A-Za-z]:[\\/][^\s"'`)\]},;]*)/g
 const realPathHits = []
+const exemptedExamples = []
 for (const { name, text } of textFiles) {
   for (const match of text.matchAll(DRIVE_PATH)) {
     const candidate = match[1].replace(/[.,;:]+$/, '')
     if (candidate.length < 5) continue
     if (OS_PATH_ALLOW.some((re) => re.test(candidate))) continue
+    if (DOCUMENTED_EXAMPLES.has(normalizePathForCompare(candidate))) { exemptedExamples.push(candidate); continue }
     if (existsSync(candidate)) realPathHits.push(`${name}: 本机真实存在的绝对路径 → ${candidate}`)
   }
 }
+check('★文档示例豁免清单很短（不许拿它盖真实泄露）',
+  DOCUMENTED_EXAMPLE_PATHS.length <= 5,
+  `${DOCUMENTED_EXAMPLE_PATHS.length} 条`)
 check('没有"本机真实存在"的绝对路径（盘符路径不只家目录）', realPathHits.length === 0, [...new Set(realPathHits)].slice(0, 5).join(' | '))
 
 // 作者机器的工作目录不应作为默认值出现（示例/文档里的路径说明允许，默认值不允许）

@@ -352,7 +352,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 
 ### 第三方扩展（社区）
 
-- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.5/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.5/ext)** ——
+- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.8/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.8/ext)** ——
   第一个真正用 `registerToolProvider` 的插件集：小屋 / 页面与笔记 / 工作区 / 表情四个包、20 个工具，
   按我们的 tag 维护，`ext/README.md` 里写了安装方式与五条硬约束（`file://` 解析、标准 JSON Schema、同步返回、状态放模块级…）。
   **由作者本人维护，不在本项目的支持范围内**；这里只做指路，出问题请去他仓库提。
@@ -394,7 +394,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
   它把 trace 的决策链翻译成人话：`收到消息✅ → 白名单✅ → 静默时段⛔` + 「卡在「静默时段」：…」。
   群聊仅管理员可用；只给环节与原因，不回显消息原文。
 - 调试日志：`{cwd}/qq-bridge-debug.log`（消息路由、语音转写、agent 事件，按时间戳追加）
-- 宿主错误日志：启动 dsh web 时把 stderr 重定向到文件（如 `D:\qq-work\qq-host-err.log`）可查启动崩溃
+- 宿主错误日志：启动 dsh web 时把 stderr 重定向到文件（如 `%LOCALAPPDATA%\qq-host-err.log`）可查启动崩溃
 - 关键日志标记：`voice fetched via get_record`、`quoted voice transcribed`、`followup sent (voice)`、`group msg without @bot ignored`
 
 ## 测试

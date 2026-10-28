@@ -351,7 +351,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 
 ### Third-party extensions (community)
 
-- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.5/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.5/ext)** —
+- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.8/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.8/ext)** —
   the first plugin set that actually uses `registerToolProvider`: four packages (house / pages & notes / workspace / faces) with
   20 tools, maintained against our tags; its `ext/README.md` documents installation and the five hard constraints
   (`file://` resolution, standard JSON Schema, synchronous return, module-level state, …).
@@ -401,7 +401,7 @@ Once something is public and used, it cannot be renamed casually — so the rule
   `inbound ✅ → allowlist ✅ → quiet hours ⛔` plus "blocked at 「quiet hours」: …". Admins only in groups; it prints
   stages and reasons, never the message text.
 - Debug log: `{cwd}/qq-bridge-debug.log` (message routing, voice transcription, agent events, timestamped)
-- Host error log: redirect stderr when starting `dsh web` (e.g. `D:\qq-work\qq-host-err.log`) to diagnose startup crashes
+- Host error log: redirect stderr when starting `dsh web` (e.g. `%LOCALAPPDATA%\qq-host-err.log`) to diagnose startup crashes
 - Key log markers: `voice fetched via get_record`, `quoted voice transcribed`, `followup sent (voice)`, `group msg without @bot ignored`
 
 ## More docs

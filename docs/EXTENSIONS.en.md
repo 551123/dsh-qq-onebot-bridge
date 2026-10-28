@@ -87,6 +87,7 @@ Rules (each one was learned the hard way):
 The first plugin set that actually uses this seam (four packages / 20 tools, author-maintained, outside this project's
 support scope):
 
-- <https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.5/ext>
+- <https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.8/ext>
+  (the branch always follows our newest tag and `ext/` always sits at its root — only the tag part changes)
 
 Its `ext/README.md` documents installation and the five hard constraints its author learned — useful as real-world reading.

@@ -85,6 +85,7 @@ ctx.qqBridge.registerToolProvider(({ agentCtx, route, key, config, workspaceRoot
 
 社区里第一个真正用这套接缝的插件集（四个包 / 20 个工具，作者维护，不在本项目支持范围内）：
 
-- <https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.5/ext>
+- <https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.8/ext>
+  （分支名永远跟着我们最新的 tag 走，`ext/` 永远在分支根目录 —— 所以只有 tag 那一段会变）
 
 它的 `ext/README.md` 里有安装方式与作者总结的五条硬约束，可以当作"真实世界用法"来读。
