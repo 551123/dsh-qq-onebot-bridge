@@ -54,7 +54,7 @@ Installation is the same, through the desktop client's plugin manager:
 
 After installing the plugin and **restarting the host once** (so the panel routes mount): **DSH → Settings → QQ助手**.
 
-- **Six everyday groups are laid out directly**: **AI account & allowlists** / chat basics / **limits: inbound / outbound** / **quiet hours** / group-ops toolbox / fun & interaction / voice & media; safety, record & notify, experimental and advanced start collapsed under "advanced". 11 groups, **65 switches + 11 numeric fields + 1 time-range list + 2 allowlists**, curated from 225 config keys; a **search box** at the top filters by Chinese label / config key.
+- **11 groups, 7 laid out directly**: **AI account & allowlists** / chat basics / **limits: inbound / outbound** / **quiet hours** / group-ops toolbox / fun & interaction / voice & media; **safety, record & notify, experimental and advanced** start collapsed under "advanced". **84 keys** in total (67 switches + 12 numeric fields + 1 time-range list + 3 allowlists + 1 pattern list), curated from **235 config keys** — the panel only carries what you touch day to day, everything else stays in `cordis.patch.yml` (see "v0.7.x switches" below). A **search box** at the top filters by label / config key.
   - The two rate limits share one group, ordered the way the pipeline runs, precisely so they are not confused: **per-minute inbound turn cap** (drops the message *before* it reaches the model, saving quota) versus **outbound reply rate limit** (the model already answered; the reply is dropped *before it is sent*, protecting against QQ-side throttling). Both are **off by default** and can be enabled independently.
   - **Quiet hours (v0.6.8)**: the feature existed but could only be reached by editing YAML; the whole thing is now in the panel — the switch, **weekend exemption**, and the **quiet-window list** (two native time inputs per window, overnight ranges such as `22:00-6:00`, up to 8 windows).
   - **AI account & allowlists (v0.6.8)**: this group answers "which bot account is this, and who does it answer" — the **AI account** (`botQq`, used for @-detection and pokes), **no allowlist (answer everyone)**, the two gate switches, and the `allowUsers` / `allowGroups` lists (**an empty list denies everything**). Turning "no allowlist" on makes the bot answer **every private chat and every group**, while **the @ requirement in groups stays** (that is `replyOnlyWhenMentioned`). The lists used to be YAML-only; they are edited in the panel now (input plus an add button, numbers written as **numbers** because string ids would never match), with a one-click "recent chats" shortcut, and both list rows are marked as inactive while "no allowlist" is on.
@@ -212,6 +212,20 @@ Override `id: dsh-qq-onebot-bridge` config in the profile's `cordis.patch.yml` (
 | `injectFile` | `''` | injection queue path (empty = `cwd/qq-inject.jsonl`); lines already present at startup are skipped and the skip is recorded with a reason |
 | `injectDryRun` | `true` | **keep this true**: every outbound call triggered by an injection (send/recall/moderation…) is intercepted and counted, never sent to QQ — including the **asynchronous agent turn's reply**, whose text is recorded in the event stream |
 | `injectIntervalMs` | `2000` | injection queue poll interval in milliseconds (minimum 500) |
+
+### v0.7.x switches (also editable in the panel; listed here so defaults are documented)
+
+> The panel covers **84 of 235** keys on purpose (only what you touch day to day; connection, port, token, model settings
+> and prompts stay in the config file). These six are the v0.7 additions — their defaults are visible in the panel too.
+
+| Key | Default | Panel group | Meaning |
+|---|---|---|---|
+| `quoteReplyEnabled` | `false` | chat basics | quote the message being answered (groups only); a failed quote is retried once without it |
+| `longReplySplitOnPunctuation` | `true` | chat basics | split long replies at sentence punctuation first, then at commas; **with it off the reply is still split by the per-message limit**, it just becomes an even hard cut |
+| `extensionToolsEnabled` | `false` | experimental | let other plugins in the host inject tools/prompt sections via `ctx.qqBridge.registerToolProvider()` (additive only; throws are skipped and traced) |
+| `taintDryRunEnabled` | `false` | experimental | **taint window**: after an injection-looking message, every outbound write in that chat becomes a dry-run for a while (Q&A keeps running); each block is traced |
+| `taintWindowMinutes` | `30` | experimental (same row) | taint window length (1–1440 minutes) |
+| `taintExtraPatterns` | `[]` | experimental | **custom injection patterns**: regex array (≤20 entries, ≤200 chars each, case-insensitive, built-ins first); an invalid regex is rejected with a 400 on save |
 
 ## OneBot side setup
 
@@ -394,12 +408,27 @@ Once something is public and used, it cannot be renamed casually — so the rule
 
 ## Commands & debugging
 
-- `/new`: end the current session and start a fresh one
-- `/status`: show the current session state and session id prefix
-- **`/why` (v0.6.9)**: why a message got no reply — quote it and send `/为什么` (or `/为什么 <messageId>`, or no
-  argument for the newest message in this chat) and the trace decision chain is rendered as
-  `inbound ✅ → allowlist ✅ → quiet hours ⛔` plus "blocked at 「quiet hours」: …". Admins only in groups; it prints
-  stages and reasons, never the message text.
+**The command list is not hard-coded in the README, because it is generated from the switches you turned on** — send
+**`/help`** (or 「帮助」/「菜单」) in QQ and you get the commands that are actually available in *this* configuration
+(disabled features simply do not appear, so nothing looks broken).
+
+Summary by purpose; details in `docs/FEATURES.md`:
+
+| Purpose | Common commands |
+|---|---|
+| Session | `/new` fresh chat · `/status` state · `/summary` group summary · `/export` export log |
+| Lookup | **`/为什么`** why a message got no reply · `/health` diagnostics · `/成员` roster/detail · `/群信息` `/公告` `/荣誉` `/精华` · `/找` history · `/文件` `/取` `/相册` `/ocr` |
+| Fun | 「签到」check-in · `/签到榜` · `/积分` `/排行榜` `/转账` · 「今日人品」「抽签」 · `.r 3d6` · 「接龙」「猜数字」 · `/画` image gen · `/读` text-to-speech |
+| Group ops | `/mute` `/unmute` `/kick` `/clear` · `/公告` `/全员禁言` `/名片` `/头衔` · `/批量踢` · `/退群` (careful) |
+| Admin / debug | `/reminders` reminders · `/todo` todos · `/日报` daily report · `/kw` keyword replies · `/播报` broadcasts · `/赞榜` `/谁赞了` · `/点赞` `/戳` |
+
+The two you will use most:
+
+- **`/为什么` (v0.6.9)**: quote a message and send `/为什么` (or `/为什么 <messageId>`, or no argument for the newest
+  message in this chat) and the trace decision chain is rendered as `inbound ✅ → allowlist ✅ → quiet hours ⛔` plus
+  "blocked at 「quiet hours」: …". Admins only in groups; stages and reasons only, never the message text.
+- **`/health`**: one-shot check (connection, gates, recording/injection state, effective config) — same source as the
+  diagnostics at the top of the panel.
 - Debug log: `{cwd}/qq-bridge-debug.log` (message routing, voice transcription, agent events, timestamped)
 - Host error log: redirect stderr when starting `dsh web` (e.g. `%LOCALAPPDATA%\qq-host-err.log`) to diagnose startup crashes
 - Key log markers: `voice fetched via get_record`, `quoted voice transcribed`, `followup sent (voice)`, `group msg without @bot ignored`
@@ -410,7 +439,7 @@ Once something is public and used, it cannot be renamed casually — so the rule
 - **[docs/EXTENSIONS.en.md](docs/EXTENSIONS.en.md)** — the **extension seam**: the `ctx.qqBridge` outlet, read-only events, the seven provider rules, `instanceId`, taint `source`, and the config keys that affect third parties
 - **[docs/FEATURES.en.md](docs/FEATURES.en.md)** — v0.5 details: merged-forward expansion, `/文件` `/取` `/相册` `/ocr`, per-day archive and `/找`, members and group info, reactions
 
-## Standalone control console (`control/`, v0.4.0)
+## Standalone control console (`control/`, since v0.4.0)
 
 The plugin ships an independent local operations console that does **not** depend on DSH Desktop: it keeps working when the host is down, and shows every port and process at a glance.
 
@@ -441,7 +470,7 @@ npm run control            # or: node control/bin/qq-control.mjs --open
 
 ## Tests
 
-60 unit suites, 4014 assertions in `test/*-unit.mjs`, plus 3 live scripts:
+62 unit suites, 4136 assertions in `test/*-unit.mjs`, plus 3 live scripts:
 
 ```sh
 
@@ -449,7 +478,7 @@ npm run control            # or: node control/bin/qq-control.mjs --open
 
 node test/control-unit.mjs        # or one at a time: node test/<name>-unit.mjs
 
-#    61 files: bridge branches/commands/guards, console HTTP + diagnosis, recording/replay/injection,
+#    62 files: bridge branches/commands/guards, console HTTP + diagnosis, recording/replay/injection,
 
 #    injection safety boundaries, the hard-constraint acceptance page, the `/why` decision-chain wording…
 
