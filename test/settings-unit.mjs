@@ -15,7 +15,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, PANEL_ROW_BY_KEY, QUIET_MAX_RANGES, extensionStatusLines, normalizeNumberList, normalizeQuietRanges, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
+  PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, PANEL_NOTES, PANEL_ROW_BY_KEY, QUIET_MAX_RANGES, extensionStatusLines, normalizeNumberList, normalizeQuietRanges, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
   panelSnapshot, readPatchValue, upsertPatchValue,
 } from '../lib/panel.js'
 import { detectNapcatBat, planNapcatAction } from '../lib/napcat-launch.js'
@@ -112,6 +112,27 @@ check('面板分组都有 id/title 且开关不重复',
 // ---- 说明必须"写全"（用户反馈：有些开关只写了标签，没说需要额外软件/模型）----
 const needsVocabulary = new Set(Object.values(PANEL_NEEDS))
 const allRows = PANEL_FLAT_ROWS
+/**
+ * ★ v0.7.8：面板 ↔ schema 的契约，只钉**一个方向**（面板键必须都在 schema 里）。
+ *
+ * 为什么不钉反方向：schema 有 234 个键，面板刻意只暴露常用的那部分
+ * （连接地址、端口、token、模型参数、提示词都不进面板）。但反方向必须成立——
+ * 面板里写了一个 schema 里不存在的键，用户点保存会被服务端拒掉，那就是"界面在、功能没有"的假开关。
+ */
+{
+  const schemaKeys = new Set(Object.keys(Config({})))
+  const missingInSchema = PANEL_KEYS.filter((key) => !schemaKeys.has(key))
+  check('★★面板登记的每个键都在 schema 里（否则是"点了保存会被拒"的假开关）',
+    missingInSchema.length === 0, JSON.stringify(missingInSchema.slice(0, 8)))
+  const dupes = PANEL_KEYS.filter((key, index) => PANEL_KEYS.indexOf(key) !== index)
+  check('★★面板键没有重复登记（重复会让一行覆盖另一行）', dupes.length === 0, JSON.stringify(dupes))
+  check('面板是 schema 的**子集**（刻意只暴露常用的一部分）',
+    PANEL_KEYS.length < schemaKeys.size && PANEL_KEYS.length >= 60,
+    `面板 ${PANEL_KEYS.length} / schema ${schemaKeys.size}`)
+  check('★面板说明里写清"其余键在配置文件里"（v0.7.8）',
+    /cordis\.patch\.yml/.test(PANEL_NOTES.scope) && /常用/.test(PANEL_NOTES.scope),
+    PANEL_NOTES.scope.slice(0, 40))
+}
 const shortHints = allRows.filter((entry) => !entry.hint || entry.hint.trim().length < 20)
 check('每个开关都有像样的说明（≥20 字，不许空着或一句带过）',
   shortHints.length === 0, shortHints.map((entry) => entry.key).join(','))
@@ -132,13 +153,14 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 83 = 67 开关 + 12 数值 + 1 时段 + 3 名单）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 84 = 67 开关 + 12 数值 + 1 时段 + 3 名单 + 1 句式）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 83
+  && allRows.length === 84
   && boolRows.length === 67 && numRows.length === 12
   && allRows.filter((entry) => entry.type === 'times').length === 1
-  && allRows.filter((entry) => entry.type === 'list').length === 3,
+  && allRows.filter((entry) => entry.type === 'list').length === 3
+  && allRows.filter((entry) => entry.type === 'patterns').length === 1,
   `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length} / 共 ${allRows.length}`)
 check('生图/语音这些"要装东西"的功能，说明里点明了需要什么',
   ['imageGenEnabled', 'ttsEnabled'].every((key) => {
@@ -942,6 +964,31 @@ await setHandler(fakeRequest('POST', { key: 'adminUsers', value: ['100000003'] }
 check('★POST 也拒绝把管理员写成字符串（否则永远匹配不上）',
   adminBad.out.status === 400 && /只接受数字号码/.test(JSON.parse(adminBad.out.body).reason),
   brief(JSON.parse(adminBad.out.body).reason))
+/**
+ * ★★ v0.7.8（实验性）：自定义注入句式 `taintExtraPatterns` 走面板写入路径。
+ *   与白名单的关键差别：这里必须是**字符串原文**（正则里的 `\` `.` 一个都不能丢），
+ *   而且坏正则要在**点保存时**就被拒（而不是等某条消息进来才炸）。
+ */
+const patternOk = makeResponse()
+await setHandler(fakeRequest('POST', { key: 'taintExtraPatterns', value: ['把.*(配置|密钥).*发(给)?我'] }, JSON_HEADERS), patternOk)
+check('★★POST 自定义句式写进配置（字符串原样保留，反斜杠/括号不丢）',
+  patternOk.out.status === 200
+  && JSON.stringify(readPatchValue(readFileSync(patchPath, 'utf8'), 'taintExtraPatterns')) === JSON.stringify(['把.*(配置|密钥).*发(给)?我']),
+  brief({ status: patternOk.out.status, reason: JSON.parse(patternOk.out.body).reason }))
+for (const [label, value, expect] of [
+  ['坏正则', ['(?<bad'], '正则不合法'],
+  ['不是字符串', [123], '必须是字符串'],
+  ['超长（201 字）', ['x'.repeat(201)], '最多 200 字'],
+  ['不是数组', '把.*发我', '必须是数组'],
+]) {
+  const before = readFileSync(patchPath, 'utf8')
+  const res = makeResponse()
+  await setHandler(fakeRequest('POST', { key: 'taintExtraPatterns', value }, JSON_HEADERS), res)
+  check(`★★POST 拒绝自定义句式的${label}，且不改文件`,
+    res.out.status === 400 && String(JSON.parse(res.out.body).reason).includes(expect)
+    && readFileSync(patchPath, 'utf8') === before,
+    brief({ status: res.out.status, reason: JSON.parse(res.out.body).reason }))
+}
 const wrongMethod = makeResponse()
 await getHandler(fakeRequest('POST'), wrongMethod)
 check('方法不对给 405', wrongMethod.out.status === 405, String(wrongMethod.out.status))

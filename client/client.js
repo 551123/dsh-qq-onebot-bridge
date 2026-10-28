@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
      * 浏览器只在**页面加载时**取一次 bundle，没法热替换，所以只能刷新一次页面。
      * 与其让用户对着没变化的界面猜，不如自己认出来并给一个「刷新页面」按钮（见下面的 qqai-stale 横幅）。
      */
-    const CLIENT_VERSION = '0.7.7'
+    const CLIENT_VERSION = '0.7.8'
 
     const CSS = `
 .qqai-wrap{display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--dsw-alias-label-primary,#111)}
@@ -573,6 +573,70 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 正则列表行（v0.7.8，`taintExtraPatterns`：自定义注入句式）。
+     *
+     * 与 `ListRow`（号码）的区别：这里是**字符串原文**，所以
+     *   - 输入框不做字符过滤（正则里的 `\d`、`.`、`(` 都得原样保留）；
+     *   - 提交前在本地先 `new RegExp` 试一次，坏正则**当场在行内报错**，不写进配置、也不等服务端；
+     *   - 每条都显示原文（用 `<code>` 等宽），因为正则里的空格与反斜杠肉眼必须看得出。
+     */
+    function PatternsRow({ row, busy, onSet }) {
+      const list = Array.isArray(row.value) ? row.value : []
+      const maxItems = Number.isFinite(row.maxItems) ? row.maxItems : 20
+      const maxLength = Number.isFinite(row.maxLength) ? row.maxLength : 200
+      const defList = Array.isArray(row.defaultValue) ? row.defaultValue : null
+      const [draft, setDraft] = React.useState('')
+      const [error, setError] = React.useState('')
+      const full = list.length >= maxItems
+      const add = () => {
+        const text = String(draft).trim()
+        if (text === '') return
+        if (text.length > maxLength) { setError(`一条最多 ${maxLength} 字（这条 ${text.length} 字）`); return }
+        try { new RegExp(text, 'i') } catch (err) { setError(`正则不合法：${err && err.message ? err.message : err}`); return }
+        if (list.includes(text)) { setError('这条已经加过了'); return }
+        setError('')
+        setDraft('')
+        onSet(row.key, [...list, text])
+      }
+      return h('div', { className: 'qqai-row' },
+        h('div', { className: 'qqai-text' },
+          h('label', { className: 'qqai-label' }, row.label,
+            row.pending === true ? h('span', { className: 'qqai-badge', title: '已写入配置，正在等宿主应用（一般 2–3 秒）；期间显示的就是刚改的值' }, '待生效') : null,
+            defList !== null
+              ? h('span', { className: 'qqai-need', title: `出厂默认：${defList.length === 0 ? '（空）' : defList.join(' / ')}` }, `默认：${defList.length === 0 ? '空' : `${defList.length} 条`}`)
+              : null),
+          row.hint ? h('span', { className: 'qqai-hint', title: row.hint }, richText(row.hint)) : null,
+          h('span', { className: 'qqai-key' }, `${row.key}（${list.length} / ${maxItems} 条）`)),
+        h('div', { className: 'qqai-list' },
+          list.length === 0 ? h('span', { className: 'qqai-unit' }, '（空 = 只用内置的 8 条句式）') : null,
+          list.map((item, index) => h('div', { className: 'qqai-chip', key: index },
+            h('code', { className: 'qqai-chip-text' }, String(item)),
+            h('button', {
+              className: 'qqai-time-del', type: 'button', disabled: busy === true,
+              title: '删掉这一条', 'aria-label': `${row.label}：删掉 ${item}`,
+              onClick: () => onSet(row.key, list.filter((unused, at) => at !== index)),
+            }, '×'))),
+          h('div', { className: 'qqai-time' },
+            h('input', {
+              className: 'qqai-list-input', type: 'text', placeholder: '正则，例如：把.*(配置|密钥).*发(给)?我',
+              value: draft, disabled: busy === true || full, spellCheck: false,
+              'aria-label': `${row.label}：要添加的正则`,
+              onChange: (event) => { setDraft(String(event.target.value).slice(0, maxLength + 20)); setError('') },
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') add()
+                if (event.key === 'Escape') { setDraft(''); setError('') }
+              },
+            }),
+            h('button', {
+              className: 'qqai-time-add', type: 'button',
+              disabled: busy === true || full || draft.trim() === '',
+              title: full ? `最多 ${maxItems} 条` : '加一条自定义句式',
+              onClick: add,
+            }, `+ 添加（${list.length}/${maxItems}）`)),
+          error !== '' ? h('span', { className: 'qqai-inactive' }, `⚠️ ${error}`) : null))
+    }
+
+    /**
      * 桥的连接状态一行（v0.6.8）。
      *
      * 用户 2026-10-19「为啥登陆了以后没有任何反馈啊」「但是能登上 NapCat」——NapCat 那边登录成功，
@@ -791,7 +855,9 @@ window.__ModuleLoader__.load({
             ? h(TimesRow, { key: row.key, row, busy, onSet })
             : row.type === 'list'
               ? h(ListRow, { key: row.key, row, busy, onSet, bridge })
-              : row.type === 'number'
+              : row.type === 'patterns'
+                ? h(PatternsRow, { key: row.key, row, busy, onSet })
+                : row.type === 'number'
                 ? h(NumberRow, { key: row.key, row, busy, onSet })
                 : h(Row, { key: row.key, row, busy, onSet })
       )))
