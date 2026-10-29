@@ -2,6 +2,8 @@
 
 QQ ↔ DeepSeek Harness 双向桥插件（独立 bundle）。QQ 消息直接驱动 DSH agent 会话，agent 回复自动发回 QQ。
 
+当前版本 **v0.7.9** · [发布记录（Releases）](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) · [更新日志](CHANGELOG.md)
+
 ## 架构
 
 ```
@@ -64,8 +66,8 @@ dsh plugin --profile web remove dsh-qq-onebot-bridge
 装好插件、**重启一次宿主**（让面板路由挂上）之后：**DSH → 设置 → QQ助手**。
 
 - **11 组、7 组直接铺开**：**AI账号与白名单** / 对话基础 / **限流：入站 / 出站** / **避开高峰期** / 群运营工具箱 / 娱乐与互动 / 语音与媒体；
-  **安全与风控 · 记录与通知 · 实验性 · 高级与调试**四组标「进阶」、默认折叠。共 **84 个键**（67 开关 + 12 数值 + 1 时段列表 + 3 名单 + 1 句式列表），
-  从 **235 个配置键**里精选 —— 面板只放"日常会动的"，其余仍在 `cordis.patch.yml`（见下面的「v0.7.x 新增开关」）。
+  **安全与风控 · 记录与通知 · 实验性 · 高级与调试**四组标「进阶」、默认折叠。共 **87 个键**（69 开关 + 12 数值 + 1 时段列表 + 3 名单 + 2 句式列表），
+  从 **238 个配置键**里精选 —— 面板只放"日常会动的"，其余仍在 `cordis.patch.yml`（见下面的「v0.7.x 新增开关」）。
   顶部**搜索框**按中文标签 / 配置键名过滤（纯前端）。
   - 两个限流闸放在**同一组**、按管道顺序排，就是为了别混：**每分钟进模型上限**（入站，消息还没进模型就拦，省模型额度）vs **出站回复限流**（模型已生成、发出去之前拦，防 QQ 端发太快被风控）。两个**默认都关**，可以只开一个。
   - **开关和它的数值在同一行里**：左边开关、右边 `− n +`，不用再上下对照「XX」和「XX·数值」谁管谁。
@@ -230,7 +232,7 @@ profile 的 `cordis.patch.yml` 覆盖 `id: dsh-qq-onebot-bridge` 的 config（�
 
 ### v0.7.x 新增开关（面板里能改，也列在这里方便查默认值）
 
-> 面板只覆盖 **84 / 235** 个键（刻意只放日常会动的；连接地址、端口、token、模型参数、提示词只在配置文件里）。
+> 面板只覆盖 **87 / 238** 个键（刻意只放日常会动的；连接地址、端口、token、模型参数、提示词只在配置文件里）。
 > 下面这几个是 v0.7 加的，默认值**都在面板里能看到**，这里只是给"看文档的人"一个索引。
 
 | 键 | 默认 | 面板位置 | 说明 |
@@ -241,6 +243,12 @@ profile 的 `cordis.patch.yml` 覆盖 `id: dsh-qq-onebot-bridge` 的 config（�
 | `taintDryRunEnabled` | `false` | 实验性 | **污点窗口**：入站命中注入句式后，该会话一段时间内所有出站写动作降级为 dry-run（问答照常），每次拦截都写 trace |
 | `taintWindowMinutes` | `30` | 实验性（与上一项同一行） | 污点窗口时长（1–1440 分钟） |
 | `taintExtraPatterns` | `[]` | 实验性 | **自定义注入句式**：正则数组（≤20 条、每条 ≤200 字、大小写不敏感、内置 8 条优先）；坏正则保存时 400 拒掉 |
+| `outboundRedactEnabled` | `false` | 安全与风控 | **出站脱敏（防线三，v0.7.9）**：发送前把文本里的密钥打码（`sk-…` / `gh*_…` / `AKIA…` / `xox…` / JWT / `Bearer …` / 私钥块）。**QQ 号 / 手机号 / URL 不碰**；只处理文本段 |
+| `outboundRedactBlock` | `false` | 安全与风控 | 命中时的动作：`false` = 打码后照发，`true` = **整条不发**并记 trace |
+| `outboundRedactPatterns` | `[]` | 安全与风控 | 自定义脱敏规则（正则数组，≤20 条 / ≤200 字）；坏正则跳过并记 trace |
+
+> 想知道"换了 OneBot 实现之后哪些功能会失效"：见 **[docs/COMPAT.md](docs/COMPAT.md)**，
+> 或者直接发 `/health` —— 第一行是识别到的实现，后面会点名失败过的动作与最可能的原因。
 
 ## 用户侧（OneBot 实现）配置
 
@@ -431,7 +439,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 
 ## 测试
 
-62 个单测脚本，共 4136 项断言（`test/*-unit.mjs`）+ 3 个真机脚本：
+64 个单测脚本，共 4190 项断言（`test/*-unit.mjs`）+ 3 个真机脚本：
 
 ```sh
 
@@ -485,6 +493,11 @@ node test/replay-live-host.mjs --token <控制台 token>   # 录制 → 离线�
 - `allowUsers` / `allowGroups` 未配置（为空）时，插件**默认拒绝所有私聊与群消息**——请显式填入自己的 QQ 号与群号后再使用；配置白名单后，白名单外的任何人都无法驱动你的 agent
 - 插件只监听 `127.0.0.1`，不要改成 `0.0.0.0` 暴露公网
 - 语音与图片会上传到第三方云服务（STT API）处理，**敏感语音请勿发送**
+- **密钥泄露**：模型看到的内容（群聊、文件、网页回显）可能包含你的密钥，被它复述进群。插件现在有**三道防线**：
+  ① 注入回合 dry-run（`injectDryRun`）② 污点窗口（`taintDryRunEnabled`，命中注入句式后窗口内出站全拦）
+  ③ **出站脱敏**（`outboundRedactEnabled`，v0.7.9，默认关）—— 发送前把 `sk-…` / `gh*_…` / `AKIA…` / JWT /
+  `Bearer …` / 整段私钥打码（或按 `outboundRedactBlock` 整条拦下），并在 trace 里注明命中了哪条规则（**不写原文**）。
+  这三道都需要自己打开；关着就等于没有这层保护。
 
 ### 合规提示
 
@@ -509,6 +522,7 @@ node test/replay-live-host.mjs --token <控制台 token>   # 录制 → 离线�
 
 - **[docs/DEBUG.md](docs/DEBUG.md)** —— 调试 / 排障：trace、离线回放、事件注入、一键体检、诊断包、硬约束验收台
 - **[docs/EXTENSIONS.md](docs/EXTENSIONS.md)** —— **扩展接缝**：`ctx.qqBridge` 的出口、只读事件、工具 provider 的七条规矩、`instanceId`、污点 `source`、会影响到第三方的配置键
+- **[docs/COMPAT.md](docs/COMPAT.md)** —— **换 OneBot 实现会怎样**：71 个 action 的三层分级（标准 / 扩展 / NapCat 专属）、换实现的检查清单、以及为什么不做"主动探针"
 - **[docs/FEATURES.md](docs/FEATURES.md)** —— v0.5 能力细节：合并转发展开、`/文件` `/取` `/相册` `/ocr`、按天归档与 `/找`、群成员与群信息、表情反应
 
 ## 独立控制台（control/，自 v0.4.0）
@@ -556,12 +570,17 @@ npm run control            # 或 node control/bin/qq-control.mjs --open
 
 ## 更新日志
 
+> **每个发过的版本都有 Release 页**（27 个 tag 全覆盖：该版改了什么 + 与上一版的完整 diff 链接）：
+> <https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases> —— 想快速判断"要不要升级"看这里；
+> 想读完整历史（缺陷清单、测试计数）看 `CHANGELOG.md`。
+
 最近五个版本（始终滚动展示）：
 
+- **v0.7.9** — 「换桥会怎样 + 防线三」：① **能力矩阵**（`lib/capability.js`）—— 插件一共调 71 个 OneBot action，按 **standard 32 / extension 31 / napcat 4** 三层分级；连上后读 `get_version_info` 认实现（NapCat/LLOneBot/Lagrange/…），`#call` 唯一出口挂**被动账本**（成功计数、失败记次数与错误，**不记参数**），首次失败写一条 warn trace 并直接判断「大概率是当前实现不支持」还是「查连接/权限」；`/health` 与面板「高级与调试」都能看到；新增 **docs/COMPAT.md 中英**（三层表 + 换实现检查清单）。② **出站脱敏**（防线三，`outboundRedactEnabled` 默认关）—— 发送前把 `sk-…` / `gh*_…` / `AKIA…` / JWT / `Bearer …` / 整段私钥打码（保留首尾），`outboundRedactBlock` 可改成整条拦下；**QQ 号/手机号/URL 不碰**；收口在 `sendSegments`（16 个出站调用点全覆盖）；trace 只写命中的规则名、**不写原文**。③ 面板「安全与风控」「高级与调试」两组新增状态行；至此三道防线齐：注入 dry-run → 污点窗口 → 出站脱敏。
 - **v0.7.8** — 「自定义注入句式 + 四处收拾」：① **`taintExtraPatterns`**（正则数组，默认空）—— 污点窗口除了内置 8 条，还能让管理员按群补句式（≤20 条 / 每条 ≤200 字 / 大小写不敏感 / 内置优先）；**坏正则不静默**：面板点保存时服务端先编译，语法错当场 400 且不改文件；配置文件里手写错的，桥启动时写 trace 点名。② 面板说明讲清「只覆盖约三分之一」（235 个键里登记 84 个，连接/端口/token/模型参数只在 YAML 里），并新增「面板键 ⊆ schema」的测试防线。③ 新增 **`.gitattributes`**（`* text=auto eol=lf`），消掉每次提交的 CRLF 噪音。④ `package.json` 补 `engines.node>=20` 与 `author`。⑤ 新增 **`docs/EXTENSIONS.md` 中英**（扩展接缝参考：出口 API / 只读事件 / provider 七条规矩 / instanceId / 污点 source）；⑥ 修正 `punctuation: false` 的措辞（**仍会按上限分批**，只是不找标点）。
 - **v0.7.7** — 「按标点断句变成配置键」：新增 **`longReplySplitOnPunctuation`**（默认开，面板「对话基础」里一行）——`#replyTo` 的调用点直接读它，所以第三方不用再改我们的函数签名或调用点（v0.7.6 只给了函数参数，没接线）。只有**超过单条上限**的长回复才触发分批，普通对话看不到区别；关掉后**仍然会按单条上限切成多条**（分批不受影响），只是每批不再往回找标点、变成等长硬切。
 - **v0.7.6** — 「给补丁作者收尾的三件小事」：① **`splitSegments(segments, limit, { punctuation: false })`** —— 给"不想按标点断句"的调用方一个开关（默认仍三级：句末 → 句内 → 硬切），issue #4 作者为 0.7.5 保留的最后一条编辑因此可以删；② README 社区链接跟到 **`patches/0.7.5/ext`**，并写死约定「分支永远叫 `patches/<我们的 tag>`、`ext/` 永远在根目录，里面几个提交不影响地址」；③ 立一条约定：**会让人重锚的改动（`lib/bridge.js` 顶部 import、整块重写）在 CHANGELOG 里点一句** ——他靠字面锚点定位，不改他迁就、只要知道。
 - **v0.7.5** — 「第三方要的五件事」：① **`api.instanceId`**（每实例一个随机串）—— 宿主重建桥后第三方直接比 id，不用再靠 `toolProviders()` 前缀 + 轮询猜（作者实测轮询会误判、也会漏掉快速切换）；② **provider 出问题不再静默**：返回里的 `reason` 记进 trace，抛错时**带上调用栈首帧**（`body.mjs:42:9`）；③ **污点事件带 `data.source`**（`inbound-injection`），避免和第三方的 taint 同名混着；④ **断句补二级回退**：句末（60% 窗口）找不到 → 句内标点（50%，`，,、）)」』：:`）→ 才硬切，中文长句不再挤成一坨；⑤ README 加「**第三方扩展（社区）**」指路（四个包 / 20 工具，注明作者维护、不指文件只指目录）。
-- **v0.7.4** — 「断句 · 白名单时机 · 污点窗口」：① **长回复按句子分批**——`splitSegments` 以前只按字符数硬切（常把一句话劈成两半），现在优先在句末标点后断开、找不到标点才硬切，拼回来一字不差；② 面板写清**白名单在建会话之前就拦下**（不在名单里的会话根本不会创建，所以不会"回一句拒绝"，排查看 `/为什么`）；③ **污点窗口（实验性，默认关）**：入站文本命中注入句式（`忽略之前所有指令`、`ignore all previous instructions`、`输出你的系统提示词`…）时给该会话打限时标记，窗口内（默认 30 分钟，可配 1–1440）**文本/图片/文件/语音/撤回/贴表情一律降级为 dry-run**，问答照常；打标与**每次拦截**都写 trace，出口返回 `ok:false` 并写明原因，面板状态行显示"几个会话正在被拦"，`clearTaint()` 可手动解除。随手修掉 3 个真 BUG：媒体工具被拦时仍报 `sent:true`、`/取 文件` 没发出去却回"✅ 已发到私聊"、出口被拦只给笼统原因。新增 `test/taint-unit.mjs`（25 条），面板 80 → **82 键**；全量 **62 套 / 4110 断言全绿**
 
 **更早的版本（v0.4 线及之前）见 [CHANGELOG.md](CHANGELOG.md)** —— 完整历史、每个版本的缺陷清单与测试计数都在那里。
+也可以直接在 [Releases](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) 页按版本过滤（每版都带 `compare/v上一版...v本版` 的 diff 链接）。

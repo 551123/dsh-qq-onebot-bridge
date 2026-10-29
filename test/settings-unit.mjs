@@ -153,14 +153,14 @@ const missed = PANEL_KEYS.filter((key) => {
 })
 check('凡 schema 里带 apiKey/baseUrl/provider/model 的开关都标了依赖',
   missed.length === 0, missed.join(','))
-check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 84 = 67 开关 + 12 数值 + 1 时段 + 3 名单 + 1 句式）',
+check('依赖分布合理（既有"开箱即用"也有需要准备的，且总数为 87 = 69 开关 + 12 数值 + 1 时段 + 3 名单 + 2 句式）',
   allRows.filter((entry) => entry.needs === '').length >= 5
   && allRows.filter((entry) => entry.needs !== '').length >= 20
-  && allRows.length === 84
-  && boolRows.length === 67 && numRows.length === 12
+  && allRows.length === 87
+  && boolRows.length === 69 && numRows.length === 12
   && allRows.filter((entry) => entry.type === 'times').length === 1
   && allRows.filter((entry) => entry.type === 'list').length === 3
-  && allRows.filter((entry) => entry.type === 'patterns').length === 1,
+  && allRows.filter((entry) => entry.type === 'patterns').length === 2,
   `开箱即用 ${allRows.filter((entry) => entry.needs === '').length} / 需准备 ${allRows.filter((entry) => entry.needs !== '').length} / 共 ${allRows.length}`)
 check('生图/语音这些"要装东西"的功能，说明里点明了需要什么',
   ['imageGenEnabled', 'ttsEnabled'].every((key) => {

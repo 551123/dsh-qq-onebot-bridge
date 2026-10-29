@@ -2,6 +2,8 @@
 
 A bidirectional QQ ↔ DeepSeek Harness bridge plugin (independent bundle). QQ messages drive DSH agent sessions directly, and agent replies are sent back to QQ automatically.
 
+Current version **v0.7.9** · [Releases](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) · [Changelog](CHANGELOG.md)
+
 ## Architecture
 
 ```
@@ -54,7 +56,7 @@ Installation is the same, through the desktop client's plugin manager:
 
 After installing the plugin and **restarting the host once** (so the panel routes mount): **DSH → Settings → QQ助手**.
 
-- **11 groups, 7 laid out directly**: **AI account & allowlists** / chat basics / **limits: inbound / outbound** / **quiet hours** / group-ops toolbox / fun & interaction / voice & media; **safety, record & notify, experimental and advanced** start collapsed under "advanced". **84 keys** in total (67 switches + 12 numeric fields + 1 time-range list + 3 allowlists + 1 pattern list), curated from **235 config keys** — the panel only carries what you touch day to day, everything else stays in `cordis.patch.yml` (see "v0.7.x switches" below). A **search box** at the top filters by label / config key.
+- **11 groups, 7 laid out directly**: **AI account & allowlists** / chat basics / **limits: inbound / outbound** / **quiet hours** / group-ops toolbox / fun & interaction / voice & media; **safety, record & notify, experimental and advanced** start collapsed under "advanced". **87 keys** in total (69 switches + 12 numeric fields + 1 time-range list + 3 allowlists + 2 pattern lists), curated from **238 config keys** — the panel only carries what you touch day to day, everything else stays in `cordis.patch.yml` (see "v0.7.x switches" below). A **search box** at the top filters by label / config key.
   - The two rate limits share one group, ordered the way the pipeline runs, precisely so they are not confused: **per-minute inbound turn cap** (drops the message *before* it reaches the model, saving quota) versus **outbound reply rate limit** (the model already answered; the reply is dropped *before it is sent*, protecting against QQ-side throttling). Both are **off by default** and can be enabled independently.
   - **Quiet hours (v0.6.8)**: the feature existed but could only be reached by editing YAML; the whole thing is now in the panel — the switch, **weekend exemption**, and the **quiet-window list** (two native time inputs per window, overnight ranges such as `22:00-6:00`, up to 8 windows).
   - **AI account & allowlists (v0.6.8)**: this group answers "which bot account is this, and who does it answer" — the **AI account** (`botQq`, used for @-detection and pokes), **no allowlist (answer everyone)**, the two gate switches, and the `allowUsers` / `allowGroups` lists (**an empty list denies everything**). Turning "no allowlist" on makes the bot answer **every private chat and every group**, while **the @ requirement in groups stays** (that is `replyOnlyWhenMentioned`). The lists used to be YAML-only; they are edited in the panel now (input plus an add button, numbers written as **numbers** because string ids would never match), with a one-click "recent chats" shortcut, and both list rows are marked as inactive while "no allowlist" is on.
@@ -215,8 +217,8 @@ Override `id: dsh-qq-onebot-bridge` config in the profile's `cordis.patch.yml` (
 
 ### v0.7.x switches (also editable in the panel; listed here so defaults are documented)
 
-> The panel covers **84 of 235** keys on purpose (only what you touch day to day; connection, port, token, model settings
-> and prompts stay in the config file). These six are the v0.7 additions — their defaults are visible in the panel too.
+> The panel covers **87 of 238** keys on purpose (only what you touch day to day; connection, port, token, model settings
+> and prompts stay in the config file). These are the v0.7 additions — their defaults are visible in the panel too.
 
 | Key | Default | Panel group | Meaning |
 |---|---|---|---|
@@ -226,6 +228,12 @@ Override `id: dsh-qq-onebot-bridge` config in the profile's `cordis.patch.yml` (
 | `taintDryRunEnabled` | `false` | experimental | **taint window**: after an injection-looking message, every outbound write in that chat becomes a dry-run for a while (Q&A keeps running); each block is traced |
 | `taintWindowMinutes` | `30` | experimental (same row) | taint window length (1–1440 minutes) |
 | `taintExtraPatterns` | `[]` | experimental | **custom injection patterns**: regex array (≤20 entries, ≤200 chars each, case-insensitive, built-ins first); an invalid regex is rejected with a 400 on save |
+| `outboundRedactEnabled` | `false` | safety | **outbound redaction (defence three, v0.7.9)**: before sending, mask secrets in the text (`sk-…` / `gh*_…` / `AKIA…` / `xox…` / JWT / `Bearer …` / PRIVATE KEY blocks). **QQ numbers, phone numbers and URLs are never touched**; text segments only |
+| `outboundRedactBlock` | `false` | safety | What happens on a match: `false` = mask and send, `true` = **drop the whole message** and trace it |
+| `outboundRedactPatterns` | `[]` | safety | Extra redaction rules (regex array, ≤20 entries / ≤200 chars); invalid ones are skipped and traced |
+
+> Want to know "what breaks when I swap the OneBot implementation"? See **[docs/COMPAT.en.md](docs/COMPAT.en.md)**, or just send
+> `/health` — the first line names the detected implementation, the next ones name failed actions with the most likely reason.
 
 ## OneBot side setup
 
@@ -437,6 +445,7 @@ The two you will use most:
 
 - **[docs/DEBUG.en.md](docs/DEBUG.en.md)** — debugging: trace, offline replay, event injection, one-shot diagnostics, diagnostic bundles, acceptance page
 - **[docs/EXTENSIONS.en.md](docs/EXTENSIONS.en.md)** — the **extension seam**: the `ctx.qqBridge` outlet, read-only events, the seven provider rules, `instanceId`, taint `source`, and the config keys that affect third parties
+- **[docs/COMPAT.en.md](docs/COMPAT.en.md)** — **what happens when you swap the OneBot implementation**: all 71 actions in three tiers (standard / extension / NapCat-only), a swap checklist, and why there is no active probing
 - **[docs/FEATURES.en.md](docs/FEATURES.en.md)** — v0.5 details: merged-forward expansion, `/文件` `/取` `/相册` `/ocr`, per-day archive and `/找`, members and group info, reactions
 
 ## Standalone control console (`control/`, since v0.4.0)
@@ -524,6 +533,12 @@ This plugin ships **no persona, preferences, or group rules**. The whale-girl pe
 - With `allowUsers` / `allowGroups` unset (empty), the plugin **denies all private and group messages by default** — explicitly list your own QQ id and the groups to serve before use; once configured, nobody outside the allowlists can drive your agent
 - The plugin listens on `127.0.0.1` only; do not change it to `0.0.0.0`
 - Voice and images are uploaded to third-party cloud services (STT API) — **do not send sensitive audio**
+- **Secret leakage**: content the model sees (group chat, files, web echoes) may contain your keys, and it may repeat them into
+  a group. There are now **three defences**: ① injection-turn dry-run (`injectDryRun`) ② taint window (`taintDryRunEnabled`,
+  outbound blocked inside the window after an injection-looking message) ③ **outbound redaction** (`outboundRedactEnabled`,
+  v0.7.9, off by default) — before sending, `sk-…` / `gh*_…` / `AKIA…` / JWTs / `Bearer …` / private-key blocks are masked
+  (or the whole message is dropped when `outboundRedactBlock` is on), and the trace names the rule that fired (**never the
+  text**). All three are off unless you turn them on.
 
 ### Compliance tips
 
@@ -561,12 +576,17 @@ Debugging usually means sending logs to someone else, so the plugin is explicit 
 
 ## Changelog
 
+> **Every released version has a Releases page** (all 27 tags covered: what changed in that version plus a `compare` link against the previous one):
+> <https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases> — fastest way to decide "should I upgrade";
+> `CHANGELOG.md` is the full history (defect lists, test counts).
+
 The five most recent versions (always kept rolling):
 
+- **v0.7.9** — "what happens if you swap the bridge + defence three": ① **capability matrix** (`lib/capability.js`) — the plugin calls 71 OneBot actions, tiered **standard 32 / extension 31 / napcat 4**; after connecting it reads `get_version_info` to name the implementation (NapCat/LLOneBot/Lagrange/…), and the single `#call` chokepoint keeps a **passive ledger** (success counts, failure counts + last error, **never parameters**); the first failure writes a warn trace that already says whether it is "most likely unsupported by this implementation" or "check the connection"; visible in `/health` and the panel's advanced group; new **docs/COMPAT.en.md** (tier table + swap checklist). ② **outbound redaction** (defence three, `outboundRedactEnabled`, off by default) — masks `sk-…` / `gh*_…` / `AKIA…` / JWTs / `Bearer …` / private-key blocks before sending (first and last chars kept), with `outboundRedactBlock` to drop the whole message instead; **QQ numbers, phone numbers and URLs are never touched**; hooked at `sendSegments` (covers all 16 outbound call sites); the trace names the rule that fired and **never the text**. ③ Both the safety and advanced panel groups now show status lines; three defences are now complete: injection dry-run → taint window → outbound redaction.
 - **v0.7.8** — "custom injection patterns plus four tidy-ups": ① **`taintExtraPatterns`** (regex array, empty by default) lets admins add per-group patterns beyond the built-in eight (≤20 entries, ≤200 chars each, case-insensitive, built-ins first); **bad regexes are never silent** — the server compiles on save (a syntax error is a 400 that does not touch the file), and a hand-edited bad pattern is traced at startup. ② The panel now explains it only covers ~one third (84 of 235 keys; connection, port, token and model settings live in YAML), backed by a new "panel keys ⊆ schema" test. ③ New **`.gitattributes`** (`* text=auto eol=lf`) removes the CRLF noise on every commit. ④ `package.json` gained `engines.node>=20` and `author`. ⑤ New **`docs/EXTENSIONS.en.md`** (the seam reference: outlet API, read-only events, the seven provider rules, instanceId, taint source); ⑥ `punctuation: false` wording fixed — replies **are still split by the limit**, they just stop looking for punctuation.
 - **v0.7.7** — "punctuation-aware splitting becomes a config key": new **`longReplySplitOnPunctuation`** (on by default, one row in the panel's Conversation group) — `#replyTo` now reads it directly, so a third party no longer has to touch our function signature or the call site (v0.7.6 only added the parameter, without wiring it). Only replies longer than the per-message limit are affected; with it off, replies **are still split by the per-message limit** (batching is unaffected) — each batch just stops looking back for punctuation and becomes an even hard cut.
 - **v0.7.6** — "three small follow-ups for patch authors": ① **`splitSegments(segments, limit, { punctuation: false })`** gives callers a switch to turn punctuation-aware splitting off (the default stays three-level: sentence → inner → hard cut), which lets issue #4's author drop the last edit he kept for 0.7.5; ② the README community link follows to **`patches/0.7.5/ext`** and spells out the agreed convention — the branch is always `patches/<our tag>`, `ext/` always at its root, and the number of commits inside does not change the URL; ③ a promise written down: **changes that force a re-anchor (the import block at the top of `lib/bridge.js`, whole-function rewrites) get called out in the CHANGELOG** — he locates edits by literal anchors, and only asks to be told.
 - **v0.7.5** — "five things the third party asked for": ① **`api.instanceId`** (a random id per bridge instance) so a plugin can tell when the host rebuilt the bridge instead of polling `toolProviders()` prefixes (the author measured both false positives and missed switches); ② **provider failures are no longer silent** — a returned `reason` is traced, and a throw now carries the **first stack frame** (`body.mjs:42:9`); ③ **taint events carry `data.source`** (`inbound-injection`) so they do not blur with a third party's own taint; ④ **second-level sentence splitting**: sentence-end punctuation (60% window) → inner punctuation (50%, `，,、）)」』：:`) → hard cut, so long Chinese sentences stop clumping; ⑤ README gained a **third-party extensions (community)** pointer (four packages / 20 tools; author-maintained; links the directory, not files).
-- **v0.7.4** — "sentences, allowlist timing, taint window": ① **long replies split on sentence boundaries** — `splitSegments` used to cut purely by character count (slicing a sentence in half); now it prefers the last sentence-ending punctuation and only hard-cuts when there is none, with the reassembled text byte-identical. ② The panel now spells out that the **allowlist gates before a session is created** (a chat outside it never exists, so there is no "rejection reply" — use `/为什么` to see it). ③ **Taint window (experimental, off by default)**: when inbound text looks like a prompt-injection instruction (`忽略之前所有指令`, `ignore all previous instructions`, `print your system prompt`, …), that chat is marked for a bounded window (30 min by default, 1–1440 configurable) during which **text / image / file / voice / recall / reaction are all downgraded to dry-run** while Q&A keeps running; marking and **every block** are traced, the outlet returns `ok:false` with the reason, the panel shows how many chats are being held, and `clearTaint()` releases it. Also fixed three real bugs found on the way: media tools reporting `sent:true` while blocked, `/取 文件` claiming "✅ sent to your DM" when nothing was sent, and the outlet returning a generic gate reason. New `test/taint-unit.mjs` (25 assertions), panel 80 → **82 keys**; **62 suites / 4110 assertions green**
 
 **Older versions (the v0.4 line and earlier) are in [CHANGELOG.md](CHANGELOG.md)** — the full history, including every release's defect list and test counts.
+You can also filter by version on the [Releases](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) page (each entry carries a `compare/v<previous>...v<this>` diff link).
