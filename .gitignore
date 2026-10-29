@@ -46,3 +46,6 @@ qq-files/
 
 # npm pack 产物（0.7.6 起）：发布前打出来的 tarball 不进仓库
 *.tgz
+
+# ext/ 里的 provider 示例包是源码，不是本地数据；上面 qq-*/ 那条无锚点规则会连它们一起吞掉。
+!ext/qq-*/
