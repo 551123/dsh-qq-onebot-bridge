@@ -98,10 +98,15 @@
       <a id="napcatLink" href="#" target="_blank"><button>QQ助手账号</button></a>
     </div>
     <div class="grid2" style="margin-top:10px">
-      <label class="meta">宿主工作目录<input id="cfgCwd" /></label>
+      <label class="meta">宿主工作目录<input id="cfgCwd" /><span class="meta" id="cfgCwdHint" style="display:block"></span><button type="button" onclick="useBridgeCwd()">用桥的目录</button></label>
       <label class="meta">dsh bin.js 路径<input id="cfgDshBin" /></label>
-      <label class="meta">NapCat 启动脚本<input id="cfgNapcatBat" placeholder="…\NapCat\bootmain\launcher.bat" /></label>
+      <label class="meta">NapCat 启动脚本<input id="cfgNapcatBat" placeholder="…\NapCat\bootmain\launcher.bat，或 NapCatQQ-Desktop.exe" /></label>
       <label class="meta">GPT-SoVITS 启动脚本<input id="cfgTtsBat" /></label>
+    </div>
+    <!-- 补丁 34：路径框旁边直接给状态和探测按钮 —— "框空了"要能一眼分清是"没配"还是"配的文件不存在"。 -->
+    <div class="row" style="margin-top:6px;align-items:center">
+      <button onclick="detectNapcat()">自动探测 NapCat</button>
+      <span class="meta" id="napcatPathOut">（未检测）</span>
     </div>
     <!--
       这段提示是 issue #2 的直接产物：用户按报错里的 "shimFile" 去文件夹里翻了五小时。
@@ -339,6 +344,7 @@ let currentLog = 'hostOut';
 let streamEvents = [];
 let diagReport = null;
 let lastRuntime = null;
+let lastStatus = null;
 const pageErrors = [];
 
 // 面板自己也要可调试：任何脚本错误 / 未处理的 Promise 失败都直接显示出来。
@@ -443,6 +449,13 @@ function describeBridge(status) {
       alive: false,
       label: '无快照（宿主没跑）',
       hint: '运行快照由 DSH 宿主里的 QQ助手插件写出，宿主没起来就不会有：先点上面的「启动宿主」。看的是 ' + file,
+    };
+  }
+  if (status?.cwdMismatch === true && status?.bridgeCwd) {
+    return {
+      alive: false,
+      label: '无快照（目录对不上）',
+      hint: '桥把快照写在 ' + status.bridgeCwd + '，控制台却在看 ' + file + ' —— 到「配置」里点「用桥的目录」就一致了',
     };
   }
   return {
@@ -617,6 +630,53 @@ function render(status) {
     document.getElementById('cfgNapcatBat').value = cfg.napcatBat || '';
     document.getElementById('cfgTtsBat').value = cfg.ttsBat || '';
   }
+  renderNapcatPath(status.napcatPath || null);
+  lastStatus = status;
+  renderBridgeCwd(status);
+}
+// 补丁 34：把「现在填了什么 / 文件在不在 / 自动探测到哪」摊开说，别让空白框自己解释。
+function renderNapcatPath(info) {
+  const el = document.getElementById('napcatPathOut');
+  if (!el) return;
+  if (!info) { el.textContent = '（未检测）'; return; }
+  const parts = [];
+  parts.push(info.configured ? ('现在填：' + info.configured) : '现在没填（空）');
+  if (info.configured) parts.push(info.exists ? '✔ 文件存在' : '✘ 文件不存在');
+  if (info.desktop) parts.push('桌面版 exe：启动时按 start 拉起');
+  if (info.detected && info.detected !== info.configured) parts.push('自动探测到：' + info.detected);
+  el.textContent = parts.join('　·　');
+}
+async function detectNapcat() {
+  const r = await api('/api/napcat/detect', { method: 'POST' });
+  renderNapcatPath(r);
+  if (r.ok && r.path) {
+    document.getElementById('cfgNapcatBat').value = r.path;
+    toast('已填入：' + r.path + '（点「保存路径配置」才落盘）');
+  } else {
+    toast('⚠️ ' + (r.reason || '没探测到 NapCat 启动脚本'));
+  }
+}
+/**
+ * 「控制台工作目录」和「桥实际工作目录」对不对得上（2026-10-17 真机：两者不一致时
+ * 面板只说「桥：无快照（插件没加载）」，人猜不到是路径问题，更猜不到能力表全写进了没人读的目录）。
+ */
+function renderBridgeCwd(status) {
+  const hook = document.getElementById('cfgCwdHint');
+  if (!hook) return;
+  const bridge = (status && status.bridgeCwd) || '';
+  if (bridge === '') { hook.textContent = ''; hook.style.color = ''; return; }
+  const mismatch = status.cwdMismatch === true;
+  hook.textContent = mismatch
+    ? '⚠ 桥实际用的是 ' + bridge + ' —— 不一致时快照/日志会读空、能力表会写错目录。点「用桥的目录」对齐。'
+    : '与桥一致：' + bridge;
+  hook.style.color = mismatch ? '#e0a0a0' : '';
+}
+function useBridgeCwd() {
+  const input = document.getElementById('cfgCwd');
+  const bridge = (lastStatus && lastStatus.bridgeCwd) || '';
+  if (!input || bridge === '') return;
+  input.value = bridge;
+  saveConfig();
 }
 async function saveConfig() {
   const result = await api('/api/config', { method: 'POST', body: JSON.stringify({
