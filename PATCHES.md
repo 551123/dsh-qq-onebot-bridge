@@ -1,6 +1,6 @@
 # 本分支相对上游 v0.7.9 做了什么
 
-一句话：`patches/0.7.9` = tag `v0.7.9`（提交 `f1a7f19`）**+ `.gitattributes` + 21 条补丁各一个提交 + `ext/` 四个示例包 + 本文件**。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
+一句话：`patches/0.7.9` = tag `v0.7.9`（提交 `f1a7f19`）**+ `.gitattributes` + 16 条补丁各一个提交 + `ext/` 四个示例包 + 本文件**。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
 
 > 上游仓库：`cheesehaqi/dsh-qq-onebot-bridge`（MIT）。本分支只增加提交，不重写上游历史。
 
@@ -14,7 +14,7 @@
 | `patches/0.7.5` | `v0.7.5` + **23 个提交**（`.gitattributes` + 18 条补丁 + `ext/` + 分支文档），末条 `327a584`，157 编辑 | 归档（0.7.7 起不再前进） |
 | `patches/0.7.7` | `v0.7.7` + **21 个提交**（`.gitattributes` + 18 条补丁 + `ext/` + 分支文档），末条 `6655a9e`，156 编辑 | 归档 |
 | `patches/0.7.8` | `v0.7.8` + **逐条导出**（`.gitattributes` + 20 条补丁各一提交 + `ext/` + 本文件），**159 编辑**；末条 `bd62ced`（含素材表情库 4 个提交） | 归档（0.7.9 起不再前进） |
-| `patches/0.7.9` | `v0.7.9` + **逐条导出**（`.gitattributes` + 21 条补丁各一提交 + `ext/` + 本文件），**188 编辑** | **现役** |
+| `patches/0.7.9` | `v0.7.9` + **逐条导出**（`.gitattributes` + 16 条补丁各一提交 + `ext/` + 本文件），**194 编辑**（2026-10-31 合并后） | **现役** |
 
 0.7.0 线是「一个功能一个提交，升级靠 `git rebase v新tag`」。0.7.4 线**没有沿用这个形态**：0.7.4 动了断句区与白名单时机，正好压在 17 个功能提交的锚点上，逐条 rebase 等于把每条冲突都重解一遍。所以改成用补丁器的 `tools/fork-export.mjs` 从补丁库全量重导；0.7.5 / 0.7.7 / 0.7.8 / 0.7.9 沿用同一条做法（换版时补丁库重锚，fork 侧只重导）。
 
@@ -26,12 +26,12 @@
 
 | 项 | 数量 |
 | --- | --- |
-| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 21 条补丁（各一个提交）+ `ext/`；本文件的每次修订再加一个提交。总数以 `git rev-list --count v0.7.9..HEAD` 为准 |
+| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 16 条补丁（各一个提交）+ `ext/`；本文件的每次修订再加一个提交。总数以 `git rev-list --count v0.7.9..HEAD` 为准 |
 | 改动文件（不含 `ext/`） | 21 个改动 + `.gitattributes` |
 | `ext/` | 4 个包 / 13 个文件（每包 `index.js` + `body.mjs` + `package.json`，外加 `README.md`） |
 | 增删行（不含 `ext/` 与本文） | **+11 048 / −1 717**，21 个文件（`.gitattributes` 另 **+1 / −18** —— 替换上游同名属性文件，见 §8） |
 | `ext/` 增删行 | **+2 227**，13 个文件 |
-| 来源 | 补丁库 `QQ助手补丁\patches\`：**21 条补丁 / 191 条编辑 / 21 个源文件** |
+| 来源 | 补丁库 `QQ助手补丁\patches\`：**16 条补丁 / 194 条编辑 / 21 个源文件** |
 
 改动最集中的文件（增 / 删行）：`lib/bridge.js` +6 890 / −1 626、`control/ui.html` +1 106 / −4、`lib/archive.js` +875 / −2、`lib/faces.js` +378 / −8、`lib/onebot.js` +372 / −12、`control/lib/supervisor.mjs` +317 / −5、`control/lib/perf.mjs` +205 / −0（新增）、`lib/sticker-index.js` +159 / −0（新增）、`lib/index.js` +144 / −1、`lib/panel.js` +73 / −8；其余为 `lib/dice.js`、`control/lib/config.mjs`、`lib/panel.js`、`control/lib/server.mjs`、`lib/broadcast.js`、`lib/napcat-launch.js`、`control/lib/diagnose.mjs`、`lib/imagegen.js`、`lib/trace.js`。四个上游测试文件也被同步改过（`test/archive-unit.mjs`、`test/onebot-api-unit.mjs`、`test/find-unit.mjs`、`test/static-unit.mjs`）。
 
@@ -143,7 +143,7 @@ node -e "console.log(require('./package.json').version)"              # 0.7.8（
 | 序 | 提交 | 内容 |
 | --- | --- | --- |
 | 首 | `chore: 固定 LF 行尾` | `.gitattributes`（`* -text`）—— 系统级 `core.autocrlf=true`，只有仓库自己能钉住行尾 |
-| 中 | `patch-NN: …` | 20 条补丁，各自一条提交，标题带补丁名（归档转发 / 人设记忆 / 群内交互 / 工具接线 / … / 表情段） |
+| 中 | `patch-NN: …` | 16 条补丁，各自一条提交，标题带补丁名（归档转发 / 人设记忆 / 群内交互 / 工具接线 / … / 表情段） |
 | 后 | `feat(ext): 四个 provider 扩展包（20 工具）与使用说明` | `ext/` 13 个文件（从线上 `node_modules/qq-ext-*` 同步）+ `.gitignore` 反选 |
 | 后 | `docs: …` | 本文件的首次落地与历次修订 |
 
