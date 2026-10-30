@@ -373,7 +373,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 
 ### Third-party extensions (community)
 
-- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.8/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.8/ext)** —
+- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.9/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.9/ext)** —
   the first plugin set that actually uses `registerToolProvider`: four packages (house / pages & notes / workspace / faces) with
   20 tools, maintained against our tags; its `ext/README.md` documents installation and the five hard constraints
   (`file://` resolution, standard JSON Schema, synchronous return, module-level state, …).

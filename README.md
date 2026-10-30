@@ -377,7 +377,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 
 ### 第三方扩展（社区）
 
-- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.8/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.8/ext)** ——
+- **[551123 / dsh-qq-onebot-bridge · `patches/0.7.9/ext`](https://github.com/551123/dsh-qq-onebot-bridge/tree/patches/0.7.9/ext)** ——
   第一个真正用 `registerToolProvider` 的插件集：小屋 / 页面与笔记 / 工作区 / 表情四个包、20 个工具，
   按我们的 tag 维护，`ext/README.md` 里写了安装方式与五条硬约束（`file://` 解析、标准 JSON Schema、同步返回、状态放模块级…）。
   **由作者本人维护，不在本项目的支持范围内**；这里只做指路，出问题请去他仓库提。
