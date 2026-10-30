@@ -258,6 +258,24 @@
   </section>
 
   <section class="card" style="grid-column:1/-1">
+    <h2>工具参考 <span class="meta" id="toolsMeta">（21 个 qq_* 工具目录 + 每个会话命中哪条白名单规则；只读，改表用 tools/qq-tools.mjs）</span></h2>
+    <div class="row">
+      <button onclick="loadTools()">刷新</button>
+      <span class="meta" id="toolsState"></span>
+    </div>
+    <pre id="toolsOut">（点「刷新」看工具目录与白名单命中）</pre>
+  </section>
+
+  <section class="card" style="grid-column:1/-1">
+    <h2>用量与花费 <span class="meta" id="usageMeta">（按会话归集的 token 与金额估算；只读，数据来自桥写的 qq-usage-summary.json）</span></h2>
+    <div class="row">
+      <button onclick="loadUsage()">刷新</button>
+      <span class="meta" id="usageState"></span>
+    </div>
+    <pre id="usageOut">（点「刷新」看今日 / 近 7 天 / 花费最高的会话）</pre>
+  </section>
+
+  <section class="card" style="grid-column:1/-1">
     <h2>群配置 <span class="meta" id="groupsMeta">（每个群的生效开关 + 白名单 + 最近回合）</span></h2>
     <div class="row">
       <button onclick="loadGroups()">刷新</button>
@@ -888,6 +906,81 @@ async function loadJobs() {
   }
 }
 
+async function loadUsage() {
+  const out = document.getElementById('usageOut');
+  const state = document.getElementById('usageState');
+  state.textContent = '读取中…';
+  try {
+    const r = await api('/api/qq-usage');
+    if (r.ok !== true) { state.textContent = ''; out.textContent = '⚠️ ' + (r.reason || '用量与花费页不可用'); return; }
+    const lines = [];
+    const money = (value) => '¥' + (Math.round((Number(value) || 0) * 10000) / 10000).toFixed(4);
+    if (r.empty === true) {
+      lines.push('还没有账本：桥在模型完成一步后才会写一行。');
+    } else {
+      lines.push('账本：' + r.ledgerFile + '（' + (r.ledgerLines || 0) + ' 行）');
+      lines.push('今日：' + (r.today === null || r.today === undefined ? '还没花钱' : money(r.today.cny) + ' · ' + r.today.steps + ' 步'));
+      lines.push('近 7 天：' + money(r.week) + '（合计 ' + money(r.totals.cny) + ' · ' + r.totals.steps + ' 步）');
+      lines.push('');
+      lines.push('按会话（最多 30 条）：');
+      for (const row of (r.chats || [])) lines.push('  ' + String(row.key).padEnd(22) + money(row.cny) + '  ' + row.steps + ' 步');
+      lines.push('');
+      lines.push('按天：');
+      for (const row of (r.days || [])) lines.push('  ' + String(row.date).padEnd(12) + money(row.cny) + '  ' + row.steps + ' 步');
+      if ((r.models || []).length > 0) {
+        lines.push('');
+        lines.push('按模型：' + r.models.map((row) => row.model + ' ' + money(row.cny)).join('、'));
+      }
+    }
+    for (const w of (r.warnings || [])) lines.push('⚠️ ' + w);
+    lines.push('');
+    lines.push(r.note || '');
+    out.textContent = lines.join('\n');
+    state.textContent = '';
+  } catch (error) {
+    state.textContent = '';
+    out.textContent = '⚠️ ' + error.message;
+  }
+}
+async function loadTools() {
+  const out = document.getElementById('toolsOut');
+  if (out !== null) out.style.whiteSpace = 'normal';
+  const r = await api('/api/qq-tools');
+  if (r.ok !== true) {
+    if (out !== null) out.innerHTML = '<span style="color:#e0a0a0">读取失败：' + capsEsc(r.reason === undefined ? '' : r.reason) + '</span>';
+    return;
+  }
+  const catalog = Array.isArray(r.tools) ? r.tools : [];
+  const known = Object.keys(CAPS_TOOL_LABELS).length;
+  const head = '<div class="meta">工具目录：内置中文名 ' + known + ' 个，控制台从桥源码里认出 ' + catalog.length + ' 个'
+    + (catalog.length < known ? '（描述跨行的没认出来，属于正常）' : '') + '。</div>';
+  const rows = (Array.isArray(r.rules) ? r.rules : []).map((row) => {
+    const mode = row.mode === 'allow' ? '只放行' : (row.mode === 'deny' ? '拦下' : '不限制');
+    const source = row.source === '精确键' ? '本会话单独配的'
+      : (row.source === 'default' ? '没单独配 → 走默认规则' : '继承群号那层（' + row.source + '）');
+    const names = (Array.isArray(row.names) ? row.names : []).map(capsToolLabel);
+    const shown = names.length === 0 ? '—'
+      : (names.slice(0, 8).join('、') + (names.length > 8 ? ' 等 ' + names.length + ' 个' : ''));
+    return '<tr><td>' + capsEsc(row.key) + '</td><td>' + capsEsc(source) + '</td>'
+      + '<td style="white-space:nowrap">' + mode + '</td><td>' + capsEsc(shown) + '</td></tr>';
+  }).join('');
+  const missing = Array.isArray(r.missing) ? r.missing : [];
+  const table = rows === ''
+    ? '<div class="meta">（还没有任何会话，白名单表也没配）</div>'
+    : '<table><thead><tr><th>会话</th><th>这条规则哪来的</th><th>模式</th><th>生效的工具</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  const catalogRows = catalog.map((item) => '<tr><td>' + capsEsc(capsToolLabel(item.name)) + '</td>'
+    + '<td class="meta">' + capsEsc(item.name) + '</td><td>' + capsEsc(capsToolWhy(item.name)) + '</td></tr>').join('');
+  const catalogBox = catalogRows === '' ? ''
+    : '<details style="margin-top:6px"><summary class="meta">工具目录（点开看每个工具干什么）</summary>'
+      + '<table><thead><tr><th>中文名</th><th>原名</th><th>用途</th></tr></thead><tbody>' + catalogRows + '</tbody></table></details>';
+  if (out !== null) {
+    out.innerHTML = head + table
+      + (missing.length > 0 ? '<div class="meta" style="color:#e0c080">表里配了但还没有对应会话的键：' + capsEsc(missing.join('、')) + '</div>' : '')
+      + catalogBox;
+  }
+}
+
+
 async function loadGroups() {
   const out = document.getElementById('groupsOut');
   const state = document.getElementById('groupsState');
@@ -1039,6 +1132,8 @@ loadQr();
 loadArchive();
 loadPerf();
 loadJobs();
+loadTools();
+loadUsage();
 loadGroups();
 runDiagnose();
 loadAcceptance();
@@ -1050,6 +1145,8 @@ if (streamMode !== 'off') {
   setInterval(() => { if (!document.hidden) loadInbox(false); }, 15000);
   // 定时任务/群配置变化慢，自动刷新频率低一些（也不在页面不可见时空转）
   setInterval(() => { if (!document.hidden) loadJobs(); }, 20000);
+  setInterval(() => { if (!document.hidden) loadTools(); }, 60000);
+  setInterval(() => { if (!document.hidden) loadUsage(); }, 60000);
   setInterval(() => { if (!document.hidden) loadGroups(); }, 30000);
 }
 </script>
