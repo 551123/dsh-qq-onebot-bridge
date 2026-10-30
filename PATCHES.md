@@ -198,3 +198,24 @@ node -e "console.log(require('./package.json').version)"              # 0.7.8（
 - **新增 PATCH 57「面板本地补丁组」**：12 个原先只能在 yml 里改的布尔开关（收藏表情 / 裸 @ / @ 名字 / 看一眼就收 / 群图商城表情 / 私聊搜图 / 长回复合并转发 / 自动收藏表情 / 只认点名贴表情 / 表情榜单 / 宿主工具白名单 / 外部内容防线）进了设置面板，单独一组 `id: localpatch`。顺带纠正三处过期文案与数字（sim 行提到「概率插话」、注释里的 schema 键数与面板登记数、文件头的 224 键）。
 - **引擎补一小块**：`apply-forward-archive-patch.mjs` 的 `statusChecks` 原来只支持 `has`（"必须存在"），删除型补丁没法表达"必须不存在"；新增 `absent` 并抽出 `statusCheckHit()`，让两处判定共用同一口径。
 - **规模**：**20 条补丁 / 159 条编辑 / 20 个源文件**，`+10588 / −1679`（`.gitattributes` 另 +1 / −18）；`--verify` = 0 可应用 / 159 已就位 / 0 阻塞；本分支 `v0.7.8..HEAD` = **23** 提交。
+
+## 10. PATCH 58b（2026-10-30）：素材表情库接入（离线 322 张）
+
+收藏库只有 QQ「我的表情」那几十张、还要联网取 URL；这一轮把第三方插件 `dsh-nekowhale-stickers`
+的**本地镜像**接进出站表情，作为第二个表情来源。
+
+- **新文件 `lib/sticker-index.js`**：`StickerIndex` 把 `kit.stickers`（含 `emotion` / `tags` / `use` 的 322 条）
+  建成索引，只收本地确实落盘、且 ≤ 4 MiB 的（仓库里 4 张 5.19/4.91/4.17/5.58 MB 的 GIF 会被跳过 ⇒ 实际 318 张）。
+  `MOOD_TO_STICKER_EMOTIONS` 把本体情绪的 6 键映射到素材库的 24 类中文情绪。
+- **`lib/faces.js`**：新增 `setStickerResolver()` 回调位与 `[stk:名字|情绪]` 标记（`expandMarkers` 第 4 个标记类型）。
+  素材一律出 `image` 段（QQ 收藏表情缺 `file` key，`mface` 会被内核以 `-13100` 拒），`segmentFor` 拿不到就静默丢弃标记。
+- **`lib/bridge.js`**：`attachStickerKit()` / `stickerStats()`；`#faceSegmentFor` 增加「双库掷签」——
+  `faceLibraryEnabled` 与 `stickerPackEnabled` 都开时按 `stickerAutoPercent`（0–100）决定这次问哪个库；
+  `#pickStickerPack` 两级挑图（正文线索 strict → 本体情绪映射非 strict）。
+- **`lib/index.js`**：三个配置键 `faceLibraryEnabled`（默认 false）/ `stickerPackEnabled`（默认 true）/
+  `stickerAutoPercent`（默认 50）；`ctx.inject(['stickers'])` 接 kit（插件没装 ⇒ 回调不执行 ⇒ 素材库静默缺席，收藏库照旧）。
+- **`lib/panel.js` + `control/ui.html`**：两个库开关 + 占比一行进「表情」组；`qq_sticker_list` / `qq_sticker_send` 补 chip。
+- **规模**：fork 第 24 提交；工具 45 → 47（桥内 25 → 27），结构基线随之更新到 defineTool 27 / qqTools 27。
+- **踩坑**：① 插件 `DEFAULT_PACKS` 仍写旧包名「大肥鱼」，P1 改名后必须由 `cordis.patch.yml` 显式给
+  `packs: ['米白鲸','米白鲸和GPT娘']`，否则 `packs.includes()` 全 false ⇒ 0 张（离线自检就是这么先踩到的）；
+  ② `kit` 的 `emotion` 来自 `bundledMeta`（`meta/nekowhale.json`），本地 `manifest.json` 里没有这个字段。
