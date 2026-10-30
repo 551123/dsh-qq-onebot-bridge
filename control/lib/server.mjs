@@ -327,6 +327,8 @@ export function createControlServer({ config, token, api, ui = '', saveConfig = 
             return api.restartNapcatLogin()
           },
           '/api/napcat/stop': () => api.stopNapcat(),
+          // 补丁 34：NapCat 启动脚本探测（只读）。写入仍然走 POST /api/config。
+          '/api/napcat/detect': () => (typeof api.napcatDetect === 'function' ? api.napcatDetect() : { ok: false, reason: '当前控制台不支持路径探测' }),
           '/api/tts/start': () => api.startTts(),
           '/api/tts/stop': () => api.stopTts(),
           '/api/all/stop': () => api.stopAll(),
@@ -380,6 +382,16 @@ export function createControlServer({ config, token, api, ui = '', saveConfig = 
             const variant = await api.replay({ indices, entries, limit, replyText: '', overrides: variantOverrides, budgetMs: 20000 })
             const diff = diffReplays(baseline, variant)
             return { ok: true, variant: variantOverrides, ...diff }
+          },
+          // 补丁 28：插件能力表写入（解析 / 夹取 / 原子写都在 supervisor；危险开关要 confirm）
+          '/api/qq-caps': () => {
+            if (typeof api.qqCapsWrite !== 'function') return { ok: false, reason: '当前控制台不支持插件能力写入' }
+            return api.qqCapsWrite(body)
+          },
+          // 补丁 56：人设正文写入（去 BOM / CRLF→LF / 长度上限 / 原子写 + 备份都在 supervisor）
+          '/api/persona': () => {
+            if (typeof api.personaWrite !== 'function') return { ok: false, reason: '当前控制台不支持人设正文写入' }
+            return api.personaWrite(body)
           },
           '/api/queue/clear': () => {
             if (typeof api.clearQueue !== 'function') return { ok: false, reason: '当前控制台不支持清空队列' }
