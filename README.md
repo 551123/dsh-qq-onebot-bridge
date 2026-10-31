@@ -2,7 +2,7 @@
 
 QQ ↔ DeepSeek Harness 双向桥插件（独立 bundle）。QQ 消息直接驱动 DSH agent 会话，agent 回复自动发回 QQ。
 
-当前版本 **v0.7.9** · [发布记录（Releases）](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) · [更新日志](CHANGELOG.md)
+当前版本 **v0.7.10** · [发布记录（Releases）](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) · [更新日志](CHANGELOG.md)
 
 ## 架构
 
@@ -424,7 +424,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 | 查询 | **`/为什么`** 某条消息为什么没回 · `/health` 运行诊断 · `/成员` 名单/详情 · `/群信息` `/公告` `/荣誉` `/精华` · `/找一个历史` · `/文件` `/取` `/相册` `/ocr` |
 | 玩法 | 「签到」打卡 · `/签到榜` · `/积分` `/排行榜` `/转账` · 「今日人品」「抽签」 · `.r 3d6` · 「接龙」「猜数字」 · `/画` 生图 · `/读` 朗读 |
 | 群运营 | `/mute` `/unmute` `/kick` `/clear` · `/公告` `/全员禁言` `/名片` `/头衔` · `/批量踢` · `/禁言名单` `/全体余量` · `/退群`（慎用） |
-| 管理/调试 | `/reminders` 提醒 · `/todo` 待办 · `/日报` · `/kw` 词库 · `/播报` · `/赞榜` `/谁赞了` · `/点赞` `/戳` |
+| 管理/调试 | `/reminders` 提醒 · `/todo` 待办 · `/日报` · `/kw` 词库 · `/播报` · `/赞榜` `/谁赞了` · `/点赞` `/戳` · **`/能力体检`**（只读探针，见下） |
 
 两条最常用的（单独说清楚）：
 
@@ -432,6 +432,9 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
   它把 trace 的决策链翻译成人话：`收到消息✅ → 白名单✅ → 静默时段⛔` + 「卡在「静默时段」：…」。
   群聊仅管理员可用；只给环节与原因，不回显消息原文。
 - **`/health`**：一次性体检（连接、闸门、录制/注入状态、配置生效值），和面板顶部那份诊断同源。
+- **`/能力体检`（v0.7.9）**：对当前 OneBot 实现跑一轮**只读**探针（21 个 `get_*` 动作，逐个分类成
+  「支持 / 不支持 / 参数不符 / 权限不足 / 无响应」），回答"这个功能是真不支持，还是我还没用到"。
+  **写操作永远不探**（会改 QQ 状态）；群里仅管理员可触发。详见 [docs/COMPAT.md](docs/COMPAT.md)。
 
 - 调试日志：`{cwd}/qq-bridge-debug.log`（消息路由、语音转写、agent 事件，按时间戳追加）
 - 宿主错误日志：启动 dsh web 时把 stderr 重定向到文件（如 `%LOCALAPPDATA%\qq-host-err.log`）可查启动崩溃
@@ -439,7 +442,7 @@ if (api.instanceId !== lastInstanceId) { lastInstanceId = api.instanceId; reRegi
 
 ## 测试
 
-64 个单测脚本，共 4190 项断言（`test/*-unit.mjs`）+ 3 个真机脚本：
+65 个单测脚本，共 4224 项断言（`test/*-unit.mjs`）+ 3 个真机脚本：
 
 ```sh
 
@@ -576,11 +579,11 @@ npm run control            # 或 node control/bin/qq-control.mjs --open
 
 最近五个版本（始终滚动展示）：
 
+- **v0.7.10** — 「能力体检 + 两处测试口径修正」：① **`/能力体检`**（`lib/conformance.js`）—— 21 个**只读**探针（状态/版本/登录号/群与好友/成员/荣誉/精华/公告/群文件/历史消息/@全体余量/禁言名单/群打卡/群相册/系统消息…），逐个分类成「支持 / 不支持 / 参数不符 / 权限不足 / 无响应 / 没有数据」，回答"这功能是真不支持还是我没用到"；写操作**永远不探**，且 `assertProbeSafety()` 会拒绝任何 `send_/set_/delete_/upload_/mark_` 条目 —— 手滑加一条写操作，体检直接拒跑。结果落到 trace、面板「高级与调试」与 `knownUnsupported`。② 两处测试口径：`inject-guard-unit` 的 7 处数组全等改成**后缀匹配**（宿主给正文加前缀不再整段崩，且不会把「注入的消息」认成「注入的消息二」）；`privacy-unit` 区分「git 检出缺 `.gitignore`（照红）」与「npm 包形态缺（显式跳过）」。面板不变（87 键）。
 - **v0.7.9** — 「换桥会怎样 + 防线三」：① **能力矩阵**（`lib/capability.js`）—— 插件一共调 71 个 OneBot action，按 **standard 32 / extension 31 / napcat 4** 三层分级；连上后读 `get_version_info` 认实现（NapCat/LLOneBot/Lagrange/…），`#call` 唯一出口挂**被动账本**（成功计数、失败记次数与错误，**不记参数**），首次失败写一条 warn trace 并直接判断「大概率是当前实现不支持」还是「查连接/权限」；`/health` 与面板「高级与调试」都能看到；新增 **docs/COMPAT.md 中英**（三层表 + 换实现检查清单）。② **出站脱敏**（防线三，`outboundRedactEnabled` 默认关）—— 发送前把 `sk-…` / `gh*_…` / `AKIA…` / JWT / `Bearer …` / 整段私钥打码（保留首尾），`outboundRedactBlock` 可改成整条拦下；**QQ 号/手机号/URL 不碰**；收口在 `sendSegments`（16 个出站调用点全覆盖）；trace 只写命中的规则名、**不写原文**。③ 面板「安全与风控」「高级与调试」两组新增状态行；至此三道防线齐：注入 dry-run → 污点窗口 → 出站脱敏。
 - **v0.7.8** — 「自定义注入句式 + 四处收拾」：① **`taintExtraPatterns`**（正则数组，默认空）—— 污点窗口除了内置 8 条，还能让管理员按群补句式（≤20 条 / 每条 ≤200 字 / 大小写不敏感 / 内置优先）；**坏正则不静默**：面板点保存时服务端先编译，语法错当场 400 且不改文件；配置文件里手写错的，桥启动时写 trace 点名。② 面板说明讲清「只覆盖约三分之一」（235 个键里登记 84 个，连接/端口/token/模型参数只在 YAML 里），并新增「面板键 ⊆ schema」的测试防线。③ 新增 **`.gitattributes`**（`* text=auto eol=lf`），消掉每次提交的 CRLF 噪音。④ `package.json` 补 `engines.node>=20` 与 `author`。⑤ 新增 **`docs/EXTENSIONS.md` 中英**（扩展接缝参考：出口 API / 只读事件 / provider 七条规矩 / instanceId / 污点 source）；⑥ 修正 `punctuation: false` 的措辞（**仍会按上限分批**，只是不找标点）。
 - **v0.7.7** — 「按标点断句变成配置键」：新增 **`longReplySplitOnPunctuation`**（默认开，面板「对话基础」里一行）——`#replyTo` 的调用点直接读它，所以第三方不用再改我们的函数签名或调用点（v0.7.6 只给了函数参数，没接线）。只有**超过单条上限**的长回复才触发分批，普通对话看不到区别；关掉后**仍然会按单条上限切成多条**（分批不受影响），只是每批不再往回找标点、变成等长硬切。
 - **v0.7.6** — 「给补丁作者收尾的三件小事」：① **`splitSegments(segments, limit, { punctuation: false })`** —— 给"不想按标点断句"的调用方一个开关（默认仍三级：句末 → 句内 → 硬切），issue #4 作者为 0.7.5 保留的最后一条编辑因此可以删；② README 社区链接跟到 **`patches/0.7.5/ext`**，并写死约定「分支永远叫 `patches/<我们的 tag>`、`ext/` 永远在根目录，里面几个提交不影响地址」；③ 立一条约定：**会让人重锚的改动（`lib/bridge.js` 顶部 import、整块重写）在 CHANGELOG 里点一句** ——他靠字面锚点定位，不改他迁就、只要知道。
-- **v0.7.5** — 「第三方要的五件事」：① **`api.instanceId`**（每实例一个随机串）—— 宿主重建桥后第三方直接比 id，不用再靠 `toolProviders()` 前缀 + 轮询猜（作者实测轮询会误判、也会漏掉快速切换）；② **provider 出问题不再静默**：返回里的 `reason` 记进 trace，抛错时**带上调用栈首帧**（`body.mjs:42:9`）；③ **污点事件带 `data.source`**（`inbound-injection`），避免和第三方的 taint 同名混着；④ **断句补二级回退**：句末（60% 窗口）找不到 → 句内标点（50%，`，,、）)」』：:`）→ 才硬切，中文长句不再挤成一坨；⑤ README 加「**第三方扩展（社区）**」指路（四个包 / 20 工具，注明作者维护、不指文件只指目录）。
 
 **更早的版本（v0.4 线及之前）见 [CHANGELOG.md](CHANGELOG.md)** —— 完整历史、每个版本的缺陷清单与测试计数都在那里。
 也可以直接在 [Releases](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) 页按版本过滤（每版都带 `compare/v上一版...v本版` 的 diff 链接）。

@@ -2,7 +2,7 @@
 
 A bidirectional QQ ↔ DeepSeek Harness bridge plugin (independent bundle). QQ messages drive DSH agent sessions directly, and agent replies are sent back to QQ automatically.
 
-Current version **v0.7.9** · [Releases](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) · [Changelog](CHANGELOG.md)
+Current version **v0.7.10** · [Releases](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) · [Changelog](CHANGELOG.md)
 
 ## Architecture
 
@@ -437,6 +437,10 @@ The two you will use most:
   "blocked at 「quiet hours」: …". Admins only in groups; stages and reasons only, never the message text.
 - **`/health`**: one-shot check (connection, gates, recording/injection state, effective config) — same source as the
   diagnostics at the top of the panel.
+- **`/能力体检` (v0.7.9)**: runs a **read-only** check-up against the current OneBot implementation (21 `get_*` actions,
+  each classified as supported / unsupported / bad parameters / permission / no response) to answer "is this feature really
+  unsupported, or have I just not used it yet?". **Mutating actions are never probed** (they change QQ state); in groups only
+  admins may trigger it. See [docs/COMPAT.en.md](docs/COMPAT.en.md).
 - Debug log: `{cwd}/qq-bridge-debug.log` (message routing, voice transcription, agent events, timestamped)
 - Host error log: redirect stderr when starting `dsh web` (e.g. `%LOCALAPPDATA%\qq-host-err.log`) to diagnose startup crashes
 - Key log markers: `voice fetched via get_record`, `quoted voice transcribed`, `followup sent (voice)`, `group msg without @bot ignored`
@@ -479,7 +483,7 @@ npm run control            # or: node control/bin/qq-control.mjs --open
 
 ## Tests
 
-62 unit suites, 4136 assertions in `test/*-unit.mjs`, plus 3 live scripts:
+65 unit suites, 4224 assertions in `test/*-unit.mjs`, plus 3 live scripts:
 
 ```sh
 
@@ -582,11 +586,11 @@ Debugging usually means sending logs to someone else, so the plugin is explicit 
 
 The five most recent versions (always kept rolling):
 
+- **v0.7.10** — "read-only check-up + two test-granularity fixes": ① **`/能力体检`** (`lib/conformance.js`) — 21 **read-only** probes (status, version, login info, groups/friends, members, honours, essence, notices, group files, history, @all quota, mute list, check-in roster, albums, system messages…), each classified as supported / unsupported / bad parameters / permission / no response / no data, answering "is this feature really unsupported or have I not used it yet?"; mutating actions are **never** probed, and `assertProbeSafety()` refuses any `send_/set_/delete_/upload_/mark_` entry — slip in a mutating call and the check-up refuses to run. Results land in the trace, the panel's advanced group and `knownUnsupported`. ② two test fixes: `inject-guard-unit`'s seven exact array matches became **suffix matching** (a host that prepends a line no longer crashes the suite, and 「注入的消息」 is never mistaken for 「注入的消息二」); `privacy-unit` now tells "missing `.gitignore` in a git checkout" (still red) apart from "missing in an npm-shaped copy" (explicitly skipped). Panel unchanged (87 keys).
 - **v0.7.9** — "what happens if you swap the bridge + defence three": ① **capability matrix** (`lib/capability.js`) — the plugin calls 71 OneBot actions, tiered **standard 32 / extension 31 / napcat 4**; after connecting it reads `get_version_info` to name the implementation (NapCat/LLOneBot/Lagrange/…), and the single `#call` chokepoint keeps a **passive ledger** (success counts, failure counts + last error, **never parameters**); the first failure writes a warn trace that already says whether it is "most likely unsupported by this implementation" or "check the connection"; visible in `/health` and the panel's advanced group; new **docs/COMPAT.en.md** (tier table + swap checklist). ② **outbound redaction** (defence three, `outboundRedactEnabled`, off by default) — masks `sk-…` / `gh*_…` / `AKIA…` / JWTs / `Bearer …` / private-key blocks before sending (first and last chars kept), with `outboundRedactBlock` to drop the whole message instead; **QQ numbers, phone numbers and URLs are never touched**; hooked at `sendSegments` (covers all 16 outbound call sites); the trace names the rule that fired and **never the text**. ③ Both the safety and advanced panel groups now show status lines; three defences are now complete: injection dry-run → taint window → outbound redaction.
 - **v0.7.8** — "custom injection patterns plus four tidy-ups": ① **`taintExtraPatterns`** (regex array, empty by default) lets admins add per-group patterns beyond the built-in eight (≤20 entries, ≤200 chars each, case-insensitive, built-ins first); **bad regexes are never silent** — the server compiles on save (a syntax error is a 400 that does not touch the file), and a hand-edited bad pattern is traced at startup. ② The panel now explains it only covers ~one third (84 of 235 keys; connection, port, token and model settings live in YAML), backed by a new "panel keys ⊆ schema" test. ③ New **`.gitattributes`** (`* text=auto eol=lf`) removes the CRLF noise on every commit. ④ `package.json` gained `engines.node>=20` and `author`. ⑤ New **`docs/EXTENSIONS.en.md`** (the seam reference: outlet API, read-only events, the seven provider rules, instanceId, taint source); ⑥ `punctuation: false` wording fixed — replies **are still split by the limit**, they just stop looking for punctuation.
 - **v0.7.7** — "punctuation-aware splitting becomes a config key": new **`longReplySplitOnPunctuation`** (on by default, one row in the panel's Conversation group) — `#replyTo` now reads it directly, so a third party no longer has to touch our function signature or the call site (v0.7.6 only added the parameter, without wiring it). Only replies longer than the per-message limit are affected; with it off, replies **are still split by the per-message limit** (batching is unaffected) — each batch just stops looking back for punctuation and becomes an even hard cut.
 - **v0.7.6** — "three small follow-ups for patch authors": ① **`splitSegments(segments, limit, { punctuation: false })`** gives callers a switch to turn punctuation-aware splitting off (the default stays three-level: sentence → inner → hard cut), which lets issue #4's author drop the last edit he kept for 0.7.5; ② the README community link follows to **`patches/0.7.5/ext`** and spells out the agreed convention — the branch is always `patches/<our tag>`, `ext/` always at its root, and the number of commits inside does not change the URL; ③ a promise written down: **changes that force a re-anchor (the import block at the top of `lib/bridge.js`, whole-function rewrites) get called out in the CHANGELOG** — he locates edits by literal anchors, and only asks to be told.
-- **v0.7.5** — "five things the third party asked for": ① **`api.instanceId`** (a random id per bridge instance) so a plugin can tell when the host rebuilt the bridge instead of polling `toolProviders()` prefixes (the author measured both false positives and missed switches); ② **provider failures are no longer silent** — a returned `reason` is traced, and a throw now carries the **first stack frame** (`body.mjs:42:9`); ③ **taint events carry `data.source`** (`inbound-injection`) so they do not blur with a third party's own taint; ④ **second-level sentence splitting**: sentence-end punctuation (60% window) → inner punctuation (50%, `，,、）)」』：:`) → hard cut, so long Chinese sentences stop clumping; ⑤ README gained a **third-party extensions (community)** pointer (four packages / 20 tools; author-maintained; links the directory, not files).
 
 **Older versions (the v0.4 line and earlier) are in [CHANGELOG.md](CHANGELOG.md)** — the full history, including every release's defect list and test counts.
 You can also filter by version on the [Releases](https://github.com/cheesehaqi/dsh-qq-onebot-bridge/releases) page (each entry carries a `compare/v<previous>...v<this>` diff link).

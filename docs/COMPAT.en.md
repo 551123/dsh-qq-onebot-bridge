@@ -58,10 +58,24 @@ handling, `get_status` / `get_version_info`.
    implementation's own logs;
 5. The panel's "advanced" status line and the console event stream show the same information (`stage: capability`).
 
-## Why no active probing
+## Active probing: read-only check-ups only, never "try everything"
 
-"Try every action once" looks clever but is not viable: about half of the 71 actions **really change QQ state**
-(mute, kick, set essence, send notices…) — probing would mean experimenting on a real group. So we only do two safe things:
+Blind probing is not viable: about half of the 71 actions **really change QQ state** (mute, kick, set essence, send
+notices…) — trying them all would mean experimenting on a real group. So there are three safe things:
 
 - **read**: `get_version_info` / `get_status` (pure queries);
-- **account**: every real call records success/failure (never its parameters, so message content stays out of the statistics).
+- **account**: every real call records success/failure (never its parameters, so message content stays out of the statistics);
+- **on-demand check-up** (v0.7.9): send **`/能力体检`** in QQ and it probes **21 read-only actions**, classifying each as
+  "supported / unsupported / bad parameters / permission denied / no response", with the result written to the trace and the
+  panel status line.
+
+The boundary is enforced in code, twice:
+
+1. the probe list is an **allowlist** (`get_*` / `_get_*` only), and `assertProbeSafety()` refuses any entry matching
+   `send_ / set_ / delete_ / upload_ / mark_ / kick …` — if someone later slips in a mutating call, the check-up refuses to run
+   and says so in the trace;
+2. it only runs **when you ask for it** (never on startup or per message), and in groups only admins may trigger it.
+
+**Mutating actions are never probed** — they are only answered by failures during real use (the passive ledger).
+`retcode 1404` is deliberately not treated as "unsupported": it may mean the API is missing *or* that the target group/member
+does not exist, so it gets its own `not-found` bucket.
