@@ -7,7 +7,7 @@
  * to touch (see `assertKillAllowed`).
  */
 import { execFile, spawn } from 'node:child_process'
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PORT_LABELS, configWarnings } from './config.mjs'
@@ -125,7 +125,7 @@ export const QR_STALE_SECONDS = 300
  * 注意 `export … from` 不会在本地作用域建绑定，所以两件事都得写。
  */
 import {
-  NAPCAT_LAUNCH_LOG_FILE, NAPCAT_LOADER_NAMES, NAPCAT_LOADER_RE, NAPCAT_SHIM_FILE, QQ_CLIENT_RE,
+  NAPCAT_LAUNCH_LOG_FILE, NAPCAT_LOADER_NAMES, NAPCAT_LOADER_RE, NAPCAT_SHIM_FILE, QQ_CLIENT_RE, detectNapcatBat,
   fileMtime, napcatLaunchCommand, napcatLaunchLogPath, napcatRestartCommand, napcatShimPath,
   parseTasklist, pickNapcatLoaders, resolveNapcatLauncher, shimHeartbeatFresh, writeNapcatShim,
 } from '../../lib/napcat-launch.js'
@@ -317,7 +317,13 @@ export function createSupervisor(config, deps = {}) {
       hostStartedHint: /dsh web: http:\/\/127\.0\.0\.1/.test(hostLog),
       qr: qrStatus(config.napcatQr, now(), deps),
       warnings: configWarnings(config),
+      // 桥的真实工作目录 + 它和控制台 cwd 是否一致（面板据此提示「无快照」的真正原因）
+      bridgeCwd: config.bridgeCwd || config.cwd || '',
+      cwdMismatch: Boolean(config.cwd && config.bridgeCwd)
+        && String(config.cwd).replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase()
+          !== String(config.bridgeCwd).replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase(),
       config: publicConfig(config),
+      napcatPath: describeNapcatPath(),
     }
   }
 
@@ -454,6 +460,42 @@ export function createSupervisor(config, deps = {}) {
       reason: `已请求提权启动 NapCat（${String(chosen.path).split(/[\\/]/).pop()}）：垫片已执行（${branch}，日志：${logFile}）。`
         + '等几秒扫码窗口就会出现；二维码也会显示在控制台/面板里'
         + (chosen.switched ? `。注意：${chosen.reason}` : ''),
+    }
+  }
+
+  /**
+   * 补丁 34：路径框旁边那行状态。用户反馈「NapCat 启动脚本路径又不见了」——真相是配置里
+   * 存的是空串，框里只显示 value，空着看起来就像"被删了"。这里一次说清三件事：
+   * 现在填了什么（空也要说出来）、这个文件到底在不在、留空时自动探测会落到哪。
+   */
+  function describeNapcatPath() {
+    const configured = String(config.napcatBat ?? '').trim()
+    let present = false
+    if (configured !== '') {
+      try { present = fileExists(configured, deps) } catch { present = false }
+    }
+    let detected = ''
+    try {
+      detected = detectNapcatBat({ configured: '', env: process.env, exists: (file) => fileExists(file, deps) })
+    } catch { detected = '' }
+    return { configured, exists: present, detected, desktop: /\.exe$/i.test(configured) }
+  }
+
+  /** 「自动探测 NapCat」按钮：只读；真正落盘仍走 POST /api/config。 */
+  async function napcatDetect() {
+    const info = describeNapcatPath()
+    if (info.configured !== '' && info.exists) {
+      return { ok: true, path: info.configured, ...info, reason: '配置里这条已经存在，不用再探测' }
+    }
+    if (info.detected !== '') {
+      return { ok: true, path: info.detected, ...info, reason: '已探测到 NapCat 启动脚本' }
+    }
+    return {
+      ok: false,
+      path: '',
+      ...info,
+      reason: '没探测到（常见位置都没有 bootmain\\launcher.bat）。NapCatQQ Desktop 单文件版请直接填'
+        + ' NapCatQQ-Desktop.exe 的完整路径；文件夹版填 bootmain\\launcher.bat',
     }
   }
 
@@ -959,6 +1001,275 @@ export function createSupervisor(config, deps = {}) {
   }
 
   /**
+   * 「工具参考」页（本地补丁 15，只读）：21 个 qq_* 工具目录 + 每个会话命中的白名单规则。
+   *
+   * 控制台是独立进程，读不到桥内存里的 __toolTally，所以只看文件：
+   *   <pluginRoot>/lib/bridge.js   工具目录（与 tools/qq-tools.mjs 同口径抽取）
+   *   <cwd>/qq-tools.json          白名单表（补丁 14；不在 / enabled 不是 true = 未启用）
+   *   <cwd>/qq-sessions.json       会话键
+   * 本函数不改任何文件；改表请用 tools/qq-tools.mjs。
+   */
+  function qqTools() {
+    const readText = deps.readFile ?? readFileSync
+    const root = config.pluginRoot || defaultPluginRoot()
+    const bridgeFile = join(root, 'lib', 'bridge.js')
+    let catalog = []
+    let catalogError = ''
+    try {
+      catalog = extractToolCatalog(readText(bridgeFile, 'utf8'))
+    } catch (error) {
+      catalogError = '读不到桥源码（' + bridgeFile + '）：' + (error.code ?? error.message)
+    }
+    const cwd = String(config.cwd ?? '').trim()
+    const tableFile = cwd === '' ? '' : join(cwd, 'qq-tools.json')
+    const sessionsFile = cwd === '' ? '' : join(cwd, 'qq-sessions.json')
+    let table = null
+    let tableError = ''
+    try {
+      const parsed = JSON.parse(readText(tableFile, 'utf8'))
+      table = parsed !== null && typeof parsed === 'object' && parsed.enabled === true ? parsed : null
+    } catch (error) {
+      // 文件不在是**合法状态**（默认关）；其它错误才提示。
+      if (error !== null && error !== undefined && error.code !== 'ENOENT') tableError = 'qq-tools.json 读取/解析失败：' + (error.code ?? error.message)
+    }
+    let sessionKeys = []
+    let sessionsError = ''
+    try {
+      const raw = JSON.parse(readText(sessionsFile, 'utf8'))
+      const map = raw !== null && typeof raw === 'object' && raw.sessions !== null && typeof raw.sessions === 'object' ? raw.sessions : raw
+      if (map !== null && typeof map === 'object' && Array.isArray(map) === false) {
+        sessionKeys = Object.keys(map).filter((key) => /^(g|u):/.test(key)).sort()
+      }
+    } catch (error) {
+      if (error !== null && error !== undefined && error.code !== 'ENOENT') sessionsError = 'qq-sessions.json 读取失败：' + (error.code ?? error.message)
+    }
+    return {
+      ok: true,
+      ...toolsReport({ catalog, catalogError, table, tableError, sessionKeys, sessionsError, tableFile, sessionsFile, generatedAt: now() }),
+    }
+  }
+  /**
+   * 「用量与花费」页（本地补丁 17，只读）：读 <cwd>/qq-usage-summary.json（桥写的汇总）。
+   *
+   * 不在这里重新定价：定价逻辑在桥里只有一份，这里只负责读文件与排版兜底。
+   * 文件不在是**合法状态**（还没花过钱）；其它错误才提示。
+   */
+  function qqUsage() {
+    const readText = deps.readFile ?? readFileSync
+    const cwd = String(config.cwd ?? "").trim()
+    const summaryFile = cwd === "" ? "" : join(cwd, "qq-usage-summary.json")
+    const ledgerFile = cwd === "" ? "" : join(cwd, "qq-usage.jsonl")
+    let summary = null
+    let summaryError = ""
+    try {
+      summary = JSON.parse(readText(summaryFile, "utf8"))
+    } catch (error) {
+      if (error !== null && error !== undefined && error.code !== "ENOENT") summaryError = "qq-usage-summary.json 读取/解析失败：" + (error.code ?? error.message)
+    }
+    return {
+      ok: true,
+      ...usageReport({ summary, summaryError, summaryFile, ledgerFile, generatedAt: now() }),
+    }
+  }
+
+
+  // ─────────────────── 【P28 · 控制台能力面板】表文件：读 / 校验 / 原子写 ───────────────────
+  /**
+   * 能力表（C 组 + B 组）统一从这里读写。
+   *
+   * 为什么放在控制台：这些表都被桥按 5 秒 TTL 热读，控制台写完下一轮就生效，不用重启 dsh web。
+   * 写入只做三件事：解析、按已知数值字段夹取、原子落盘（tmp + rename）；结构复杂的表一律
+   * 按「原始 JSON」编辑，不假装懂它的结构，免得和插件侧解析规则漂移。
+   */
+  const CAPS_TABLES = {
+    replyStyle: { file: 'qq-reply-style.json', label: '回复表达（[SILENT] 静默 + 分条）', numeric: { maxParts: [2, 8], delayMs: [0, 5000] } },
+    persona: { file: 'qq-persona.json', label: '结构化人格表单（12 字段）' },
+    sim: { file: 'qq-sim.json', label: '仿真模式（观望 / 试探 / 活跃 / 退场）', numeric: { probeMin: [1, 200], activeMin: [2, 200], windowMs: [30000, 3600000], probeChance: [0.01, 1], activeChance: [0.01, 1], cooldownMs: [0, 3600000], restWindowMs: [60000, 7200000], maxJoins: [1, 50] } },
+    autonomy: { file: 'qq-autonomy.json', label: '自主读发（未读环 + 主动发言工具）', numeric: { maxPerHour: [1, 60], minGapMs: [0, 3600000], maxRead: [1, 200] }, danger: true },
+    closed: { file: 'qq-closed.json', label: '封闭 Agent（口径封闭 + 能力全关）', danger: true },
+    capabilities: { file: 'qq-capabilities.json', label: '能力勾选（6 个硬开关 + 提示级）' },
+    models: { file: 'qq-models.json', label: '每群 / 每人模型映射' },
+    tools: { file: 'qq-tools.json', label: '每会话工具白名单' },
+    audit: { file: 'qq-audit.json', label: '出站回复审计' },
+  }
+
+  const capsCwd = () => String(config.cwd ?? '').trim()
+
+  /** 读一张表：文件在不在、原始文本、解析结果、是否 enabled。文件不在是**合法状态**（默认关）。 */
+  function capsRead(key) {
+    const spec = CAPS_TABLES[key]
+    const cwd = capsCwd()
+    const file = spec === undefined || cwd === '' ? '' : join(cwd, spec.file)
+    const view = {
+      key,
+      label: spec === undefined ? key : spec.label,
+      file,
+      exists: false,
+      enabled: false,
+      json: null,
+      raw: '',
+      error: '',
+      danger: spec !== undefined && spec.danger === true,
+      numeric: spec === undefined ? {} : (spec.numeric ?? {}),
+    }
+    if (file === '') {
+      view.error = '控制台配置里没有 cwd（去「端口 / 进程」页填工作目录）'
+      return view
+    }
+    let text = ''
+    try {
+      text = String((deps.readFile ?? readFileSync)(file, 'utf8'))
+    } catch (error) {
+      if (error === null || error === undefined || error.code !== 'ENOENT') view.error = '读取失败：' + String(error?.code ?? error?.message ?? error)
+      return view
+    }
+    view.exists = true
+    view.raw = text.length > 200000 ? text.slice(0, 200000) : text
+    try {
+      const parsed = JSON.parse(text)
+      view.json = parsed
+      view.enabled = parsed !== null && typeof parsed === 'object' && parsed.enabled === true
+    } catch (error) {
+      view.error = 'JSON 解析失败：' + error.message
+    }
+    return view
+  }
+
+  /** 「插件能力」页：全部表 + 桥写的运行快照（只用来显示“现在什么状态”，不参与判断）。 */
+  function qqCaps() {
+    const tables = {}
+    for (const key of Object.keys(CAPS_TABLES)) tables[key] = capsRead(key)
+    return { ok: true, cwd: capsCwd(), tables, runtime: runtime() }
+  }
+
+  /**
+   * 写一张表：action = save（整表写入）/ toggle（只翻 enabled）/ reset（删文件 = 关闭）。
+   * 返回 { ok, reason, notes, table }。危险表从关到开必须带 confirm='确认'（服务端也查，不只靠前端）。
+   */
+  function qqCapsWrite(body) {
+    const key = String(body?.table ?? '').trim()
+    const spec = CAPS_TABLES[key]
+    if (spec === undefined) return { ok: false, reason: '未知的表：' + key }
+    const cwd = capsCwd()
+    if (cwd === '') return { ok: false, reason: '控制台配置里没有 cwd' }
+    const file = join(cwd, spec.file)
+    const action = String(body?.action ?? 'save')
+    if (action === 'reset') {
+      try {
+        rmSync(file, { force: true })
+      } catch (error) {
+        return { ok: false, reason: '删除失败：' + error.message }
+      }
+      return { ok: true, reason: '已删除 ' + spec.file + '（等于关闭；插件下一轮按“未配置”处理）' }
+    }
+    const previous = capsRead(key)
+    let next = null
+    if (body?.json !== null && body?.json !== undefined && typeof body.json === 'object' && Array.isArray(body.json) === false) next = { ...body.json }
+    else if (typeof body?.raw === 'string') {
+      try { next = JSON.parse(body.raw) } catch (error) {
+        return { ok: false, reason: 'JSON 解析失败：' + error.message }
+      }
+    } else next = previous.json !== null && typeof previous.json === 'object' ? { ...previous.json } : {}
+    if (next === null || typeof next !== 'object' || Array.isArray(next)) return { ok: false, reason: '表必须是一个 JSON 对象' }
+    const notes = []
+    for (const [field, range] of Object.entries(spec.numeric ?? {})) {
+      if (next[field] === undefined || next[field] === null) continue
+      const num = Number(next[field])
+      if (Number.isFinite(num) === false) {
+        notes.push(field + ' 不是数字，已移除')
+        delete next[field]
+        continue
+      }
+      const low = Array.isArray(range) ? Number(range[0]) : 0
+      const high = Array.isArray(range) ? Number(range[1]) : 0
+      const fixed = Math.min(high, Math.max(low, num))
+      if (fixed !== num) notes.push(field + ' 超出 ' + low + '-' + high + '，夹到 ' + fixed)
+      next[field] = fixed
+    }
+    if (action === 'toggle') {
+      next.enabled = body?.enabled === true
+      if (key === 'autonomy' && Array.isArray(next.chats) === false) next.chats = []
+    }
+    const turningOn = next.enabled === true && previous.enabled !== true
+    if (turningOn && spec.danger === true && String(body?.confirm ?? '') !== '确认') {
+      return { ok: false, reason: '这是危险开关（会让机器人自己开口或关掉全部能力）：请在输入框里打「确认」再打开' }
+    }
+    if (next.enabled === true && key === 'autonomy' && Array.isArray(next.chats) && next.chats.length === 0) {
+      next.enabled = false
+      notes.push('自主读发名单为空，已强制 enabled=false（先加聊天再开）')
+    }
+    const text = JSON.stringify(next, null, 2) + '\n'
+    if (Buffer.byteLength(text, 'utf8') > 64 * 1024) return { ok: false, reason: '表超过 64 KiB，拒绝写入' }
+    const tmp = file + '.tmp-' + process.pid
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(tmp, text, 'utf8')
+      renameSync(tmp, file)
+    } catch (error) {
+      try { rmSync(tmp, { force: true }) } catch { /* 清理失败不影响结论 */ }
+      return { ok: false, reason: '写入失败：' + error.message }
+    }
+    const table = capsRead(key)
+    const suffix = notes.length > 0 ? '（' + notes.join('；') + '）' : ''
+    return { ok: true, reason: '已写入 ' + spec.file + suffix, notes, table }
+  }
+  /**
+   * 人设正文（qq-persona.txt，本地补丁 56 / 2026-10-26）。
+   *
+   * 为什么放在控制台：人设是插件根目录里的一个纯文本文件，桥在 import 时读一次
+   * （lib/bridge.js 的 QQ_PERSONA 常量，读失败只打 debugLog）。0.7.0 换版时这个文件没被
+   * npm 带过来，就出现过「personaChars = 0 跑了几个小时没人发现」。这里给它一个能看见
+   * 字符数、能改、能留备份的入口。
+   *
+   * 写入只做四件事：去 BOM、CRLF→LF、长度上限、原子落盘（tmp + rename，先留 .bak）。
+   * 不写空文件：空正文等于静默无人设，宁可报错让用户去删文件。
+   * 生效要重启 dsh web —— 桥那边是模块常量，不会在运行期重读。
+   */
+  const personaFile = () => String(process.env.QQBRIDGE_PERSONA_FILE || join(config.pluginRoot || defaultPluginRoot(), 'qq-persona.txt'))
+  const PERSONA_MAX_CHARS = 20000
+
+  function personaRead() {
+    const file = personaFile()
+    let text = ''
+    try {
+      text = String((deps.readFile ?? readFileSync)(file, 'utf8'))
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        return { ok: true, exists: false, file: 'qq-persona.txt', text: '', chars: 0, bytes: 0, mtimeMs: 0, reason: '文件不存在：桥会以「没有人设」运行（宿主 stderr 有人设缺失警告）' }
+      }
+      return { ok: false, exists: false, file: 'qq-persona.txt', text: '', chars: 0, bytes: 0, mtimeMs: 0, reason: '读取失败：' + String(error?.code ?? error?.message ?? error) }
+    }
+    let mtimeMs = 0
+    try { mtimeMs = statSync(file).mtimeMs } catch { /* 读到了内容就算成功，mtime 只用于显示 */ }
+    return { ok: true, exists: true, file: 'qq-persona.txt', text, chars: text.trim().length, bytes: Buffer.byteLength(text, 'utf8'), mtimeMs, reason: '' }
+  }
+
+  function personaWrite(body) {
+    const raw = body?.text
+    if (typeof raw !== 'string') return { ok: false, reason: '缺少 text（人设正文）' }
+    let text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+    text = text.split(String.fromCharCode(13) + String.fromCharCode(10)).join(String.fromCharCode(10)).split(String.fromCharCode(13)).join(String.fromCharCode(10))
+    if (text.trim() === '') return { ok: false, reason: '正文为空：想清空人设请直接删 qq-persona.txt（这里不写空文件，免得重启后静默无人设）' }
+    if (text.length > PERSONA_MAX_CHARS) return { ok: false, reason: '正文超过 ' + PERSONA_MAX_CHARS + ' 字符（当前 ' + text.length + '）' }
+    if (text.endsWith(String.fromCharCode(10)) === false) text += String.fromCharCode(10)
+    const file = personaFile()
+    let previous = null
+    try { previous = readFileSync(file, 'utf8') } catch { previous = null }
+    let backup = false
+    if (previous !== null) {
+      try { writeFileSync(file + '.bak', previous, 'utf8'); backup = true } catch { /* 备份失败不阻止保存 */ }
+    }
+    const tmp = file + '.tmp-' + process.pid
+    try {
+      writeFileSync(tmp, text, 'utf8')
+      renameSync(tmp, file)
+    } catch (error) {
+      try { rmSync(tmp, { force: true }) } catch { /* 清理失败不影响结论 */ }
+      return { ok: false, reason: '写入失败：' + error.message }
+    }
+    return { ok: true, reason: '已保存（重启 dsh web 生效；旧正文留在 qq-persona.txt.bak）', backup, chars: text.trim().length, bytes: Buffer.byteLength(text, 'utf8') }
+  }
+  /**
    * NapCat WebUI 的**带 token** 地址（v0.5.9）。
    *
    * 为什么需要它：控制台「QQ助手账号」原来指向 `http://127.0.0.1:6099`，而 NapCat 的 WebUI
@@ -997,10 +1308,10 @@ export function createSupervisor(config, deps = {}) {
 
   return {
     status, startHost, stopHost, freePort, startNapcat, stopNapcat, startTts, stopTts, stopAll,
-    restartNapcatLogin, qr, napcatWebui,
+    restartNapcatLogin, napcatDetect, qr, napcatWebui,
     traceEvents, traceChain, runtime, diagnose, exportBundle, acceptance,
     inboxList, replay, inject, clearQueue, archiveStats, archiveSearch,
-    perf, jobsView, groups,
+    perf, jobsView, groups, qqTools, qqUsage, qqCaps, qqCapsWrite, personaRead, personaWrite,
     // 每个调用方（每个 SSE 连接）拿一份独立 tailer：共用模块级单例会让两个面板互相"偷"事件，
     // 也会让同一进程里的第二个 supervisor 读到别人的事件文件。
     tailer: () => createTraceTailer(config.logs?.trace ?? ''),
