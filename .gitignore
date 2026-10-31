@@ -46,3 +46,8 @@ qq-files/
 
 # npm pack 产物（0.7.6 起）：发布前打出来的 tarball 不进仓库
 *.tgz
+
+# fork 自己加的：ext/ 下的 provider 包要进仓库，覆盖上面的 qq-*/ 忽略规则
+!ext/qq-*/
+!ext/qq-*/*
+!ext/qq-*/*/*
