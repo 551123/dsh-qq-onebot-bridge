@@ -1085,6 +1085,7 @@ export function createSupervisor(config, deps = {}) {
     replyStyle: { file: 'qq-reply-style.json', label: '回复表达（[SILENT] 静默 + 分条）', numeric: { maxParts: [2, 8], delayMs: [0, 5000] } },
     persona: { file: 'qq-persona.json', label: '结构化人格表单（12 字段）' },
     sim: { file: 'qq-sim.json', label: '仿真模式（观望 / 试探 / 活跃 / 退场）', numeric: { probeMin: [1, 200], activeMin: [2, 200], windowMs: [30000, 3600000], probeChance: [0.01, 1], activeChance: [0.01, 1], cooldownMs: [0, 3600000], restWindowMs: [60000, 7200000], maxJoins: [1, 50] } },
+    mood: { file: 'qq-mood.json', label: '本体情绪（心情值 → 提示词）' },
     autonomy: { file: 'qq-autonomy.json', label: '自主读发（未读环 + 主动发言工具）', numeric: { maxPerHour: [1, 60], minGapMs: [0, 3600000], maxRead: [1, 200] }, danger: true },
     closed: { file: 'qq-closed.json', label: '封闭 Agent（口径封闭 + 能力全关）', danger: true },
     capabilities: { file: 'qq-capabilities.json', label: '能力勾选（6 个硬开关 + 提示级）' },
