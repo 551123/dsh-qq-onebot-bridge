@@ -113,6 +113,28 @@ function makeCtx({ createDelayMs = 0 } = {}) {
   return { ctx, emit, records, tools: registeredTools }
 }
 
+/**
+ * 会话身份**不许**靠"整段正文全等"反推（v0.7.9 踩过的坑）。
+ *
+ * 宿主/上游可能在本体**前面**加东西（例如每轮现算的时钟行 `（现在：…）`），
+ * 于是 `followups.includes(text)` 这种数组全等立刻失效 —— 拿不到 sessionId，
+ * `records.get('')` 是 undefined，整套会从第一条断言开始崩。
+ *
+ * 这里改成**后缀匹配**，因为它同时满足两件事：
+ *   - 容忍正文前缀（前面加多少都不影响身份）；
+ *   - 不会把 `注入的消息` 认成 `注入的消息二`（`.some((t) => t.includes(text))` 的隐患正是这个 ——
+ *     拿"降强度"换兼容，会让断言产生假通过）。
+ */
+const followupEndsWith = (record, text) => (record?.followups ?? []).some((entry) => entry.endsWith(text))
+
+// 给"上游给正文加前缀"准备的回归：身份匹配必须容忍前缀，且不能被前缀关系误绑。
+check('身份匹配容忍正文前缀（宿主加时钟行也不会崩）',
+  followupEndsWith({ followups: ['（现在：2026-10-31 周六 01:46 · 凌晨）\n注入的消息'] }, '注入的消息'))
+check('身份匹配不会被"前缀关系"误绑（注入的消息 ≠ 注入的消息二）',
+  !followupEndsWith({ followups: ['注入的消息二'] }, '注入的消息'))
+check('身份匹配对空记录不抛（记录可能还没建出来）',
+  followupEndsWith(undefined, 'x') === false && followupEndsWith({}, 'x') === false)
+
 const dir = mkdtempSync(join(tmpdir(), 'qq-inject-guard-'))
 const injectFile = join(dir, 'qq-inject.jsonl')
 const config = Config({
@@ -180,7 +202,7 @@ const replyOf = (sessionId, text) => mock.emit(sessionId, { type: 'assistant/mes
 const turnStart = (sessionId, turn = 1) => mock.emit(sessionId, { type: 'turn/start', data: { turn } })
 const turnEnd = (sessionId, turn = 1, reason = { kind: 'completed' }) => mock.emit(sessionId, { type: 'turn/end', data: { turn, reason } })
 const sessionIdOf = (text) => {
-  const record = [...mock.records.values()].find((item) => item.followups.includes(text))
+  const record = [...mock.records.values()].find((item) => followupEndsWith(item, text))
   return record?.sessionId ?? ''
 }
 
@@ -198,7 +220,7 @@ check('真人回复照常发出（基线）', server.sent.length === 1 && server
 // ---- ② 注入消息：同步窗口 + 异步回复都必须被拦下 ----
 server.emit('message', groupFrame('注入的消息', { __injected: true }))
 await sleep(30)
-check('注入帧也走真实管线（转交给了 agent）', mock.records.get(firstSession).followups.includes('注入的消息'))
+check('注入帧也走真实管线（转交给了 agent）', followupEndsWith(mock.records.get(firstSession), '注入的消息'))
 turnStart(firstSession, 2)
 replyOf(firstSession, '注入回合的回复')
 turnEnd(firstSession, 2)
@@ -252,7 +274,7 @@ check('每次拦截都有独立事件', bridge.trace.recent({ limit: 300 }).filt
 // ---- ⑥ 注入的私聊同理 ----
 server.emit('message', { bot: server.socket, messageType: 'private', userId: 1001, text: '私聊注入', atMe: false, ats: [], reply: null, records: [], images: [], files: [], messageId: 'pm-1', senderName: '测试', raw: { message: [] }, __injected: true })
 await sleep(30)
-const privateSession = [...mock.records.values()].find((item) => item.followups.includes('私聊注入'))?.sessionId ?? ''
+const privateSession = [...mock.records.values()].find((item) => followupEndsWith(item, '私聊注入'))?.sessionId ?? ''
 check('私聊注入也建立了会话', privateSession !== '')
 turnStart(privateSession, 1)
 replyOf(privateSession, '私聊注入回复')
@@ -402,8 +424,8 @@ appendFileSync(slowInjectFile, `${JSON.stringify({ kind: 'message', text: '注�
 await waitFor(() => slowBridge.injecting === true, 4000)
 // 注入派发还在等会话建立（800ms）时，另一个群来了一条真人消息
 slowServer.emit('message', { bot: slowServer.socket, messageType: 'group', groupId: 2003, userId: 1001, text: '别的群的真人消息', atMe: true, ats: [999], reply: null, records: [], images: [], files: [], messageId: 'g2003-1', senderName: '测试', raw: { message: [] } })
-await waitFor(() => [...slowMock.records.values()].some((record) => record.followups.includes('别的群的真人消息')), 5000)
-const otherSession = [...slowMock.records.values()].find((record) => record.followups.includes('别的群的真人消息'))?.sessionId ?? ''
+await waitFor(() => [...slowMock.records.values()].some((record) => followupEndsWith(record, '别的群的真人消息')), 5000)
+const otherSession = [...slowMock.records.values()].find((record) => followupEndsWith(record, '别的群的真人消息'))?.sessionId ?? ''
 await waitFor(() => slowBridge.injecting === false, 5000)
 if (otherSession) {
   slowMock.emit(otherSession, { type: 'turn/start', data: { turn: 1 } })
@@ -444,8 +466,8 @@ appendFileSync(flakyBridge.injectFile, `${JSON.stringify({ kind: 'message', text
 await waitFor(() => flakyBridge.injecting === false && threw, 5000)
 check('注入派发异常后 injecting 被复位（通道不卡死）', flakyBridge.injecting === false, String(flakyBridge.injecting))
 appendFileSync(flakyBridge.injectFile, `${JSON.stringify({ kind: 'message', text: '第二次注入', groupId: 2002, userId: 1001 })}\n`, 'utf8')
-await waitFor(() => [...flakyMock.records.values()].some((record) => record.followups.includes('第二次注入')), 5000)
-check('异常之后的注入仍能被消费', [...flakyMock.records.values()].some((record) => record.followups.includes('第二次注入')))
+await waitFor(() => [...flakyMock.records.values()].some((record) => followupEndsWith(record, '第二次注入')), 5000)
+check('异常之后的注入仍能被消费', [...flakyMock.records.values()].some((record) => followupEndsWith(record, '第二次注入')))
 flakyBridge.stop()
 server.dryRun = false
 

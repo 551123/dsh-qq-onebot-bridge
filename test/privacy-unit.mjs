@@ -389,6 +389,14 @@ check('示例配置里的密钥字段为空', !/(apiKey|ApiKey|token|Token)\s*:\
 // ------------------------------------------- ④ 运行产物必须被 gitignore --
 // 文本化的 .gitignore 匹配（解包副本里没有 .git，`git check-ignore` 用不了）；
 // 有 git 时再交叉核对一遍，两种模式都必须判"已忽略"。
+//
+// ⚠️ **`.gitignore` 本身可能不存在**：`npm pack` 会把它（连同 `.gitattributes`）从包里剔掉，
+// 所以任何"从 npm 装"或"按 npm 形态铺装"的副本都读不到它 —— 那不是仓库的问题。
+// 旧实现读不到就当空规则表，于是 39 个运行产物全被判"未覆盖"，整条必红（v0.7.9 实测）。
+// 现在分两种：**git 检出里缺** = 真 bug（照红）；**非 git 副本里缺** = 无法判定，显式跳过。
+const gitignorePath = join(repo, '.gitignore')
+const hasGitignore = existsSync(gitignorePath)
+const hasGitDir = existsSync(join(repo, '.git'))
 function gitignoreMatcher(text) {
   const rules = String(text).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#') && !line.startsWith('!'))
   const globToRe = (body) => body
@@ -406,7 +414,7 @@ function gitignoreMatcher(text) {
   })
   return (candidate) => compiled.some((re) => re.test(candidate))
 }
-const ignoreText = (() => { try { return readFileSync(join(repo, '.gitignore'), 'utf8') } catch { return '' } })()
+const ignoreText = (() => { try { return readFileSync(gitignorePath, 'utf8') } catch { return '' } })()
 const ignoredByText = gitignoreMatcher(ignoreText)
 const ignoredOk = []
 for (const artifact of RUNTIME_ARTIFACTS) {
@@ -419,7 +427,14 @@ for (const artifact of RUNTIME_ARTIFACTS) {
   }
   if (!ignored) ignoredOk.push(artifact)
 }
-check('所有运行产物都被 .gitignore 覆盖（文本判定 + git 交叉核对）', ignoredOk.length === 0, ignoredOk.slice(0, 6).join(', '))
+if (!hasGitignore && !hasGitDir) {
+  // npm 包 / 解包副本：`.gitignore` 不在包里，这条**无法判定**。
+  // 显式跳过并说明原因，而不是让 39 个产物全红（那会把"没这个文件"误报成"没忽略"）。
+  check('运行产物忽略检查：跳过（这份副本没有 .gitignore —— npm 包会剔除它）', true,
+    `产物 ${RUNTIME_ARTIFACTS.length} 个未判定；git 检出里不会跳过`)
+} else {
+  check('所有运行产物都被 .gitignore 覆盖（文本判定 + git 交叉核对）', ignoredOk.length === 0, ignoredOk.slice(0, 6).join(', '))
+}
 const trackedArtifacts = tracked.filter((name) => /^qq-/.test(name))
 check('没有任何运行产物被跟踪/在包里', trackedArtifacts.length === 0, trackedArtifacts.join(','))
 check('qq-control.json 未被跟踪（含控制台 token）', !tracked.includes('qq-control.json'))
