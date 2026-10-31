@@ -46,3 +46,8 @@ qq-files/
 
 # npm pack 产物（0.7.6 起）：发布前打出来的 tarball 不进仓库
 *.tgz
+
+# ext/ 是 provider 扩展包（fork 自己加的），别被上面的 qq-*/ 规则吞掉
+!ext/qq-*/
+!ext/qq-*/*
+!ext/qq-*/*/*
