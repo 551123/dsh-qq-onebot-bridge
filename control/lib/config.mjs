@@ -6,7 +6,8 @@
  * Config file: <repo>/qq-control.json   (machine-local, git-ignored)
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join, parse, resolve } from 'node:path'
+import { basename, dirname, join, parse, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { detectNapcatBat, NAPCAT_BAT_HINT } from '../../lib/napcat-launch.js'
 
 /** Ports the console cares about. 6700 is pinned by the OneBot client config. */
@@ -106,6 +107,96 @@ export function npxCacheRoots({ env = process.env, execPath = process.execPath }
   return roots
 }
 
+/** 本模块所属的 profile 目录（<DSH_HOME>/profiles/<名字>）：控制台就在这个 profile 的 node_modules 里。 */
+function selfProfileDir() {
+  let dir = dirname(fileURLToPath(import.meta.url))
+  for (let i = 0; i < 10; i += 1) {
+    const parent = dirname(dir)
+    if (parent === dir) break
+    if (basename(parent).toLowerCase() === 'profiles') return dir
+    dir = parent
+  }
+  return ''
+}
+
+/** 宿主 profile 根：用来找 cordis.patch.yml（DSH_HOME/profiles/*）。 */
+function profileRoots({ env }) {
+  const roots = []
+  const home = env.DSH_HOME || env.USERPROFILE || env.HOME || ''
+  if (home) roots.push(join(home, 'profiles'))
+  if (env.USERPROFILE) roots.push(join(env.USERPROFILE, '.dsh', 'profiles'))
+  return roots
+}
+
+/** 两个路径是不是同一个目录（忽略分隔符方向、大小写、结尾斜杠 —— Windows 上这三种写法满天飞）。 */
+export function samePath(a, b) {
+  const norm = (value) => String(value ?? '').replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase()
+  const left = norm(a)
+  const right = norm(b)
+  return left !== '' && left === right
+}
+
+/** 从 cordis.patch.yml 正文里抠出 QQ 桥那一段的 config.cwd（找不到就是空串）。 */
+export function bridgeCwdFromYaml(text) {
+  let inside = false
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const idMatch = /^\s*-\s+id:\s*(\S+)/.exec(line)
+    if (idMatch) {
+      inside = idMatch[1] === 'dsh-qq-onebot-bridge'
+      continue
+    }
+    if (!inside) continue
+    const cwdMatch = /^\s+cwd:\s*(.+)$/.exec(line)
+    if (cwdMatch) {
+      const raw = cwdMatch[1].replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '')
+      if (raw !== '') return raw
+    }
+  }
+  return ''
+}
+
+/**
+ * 桥的**真实**工作目录。
+ *
+ * 为什么需要它：控制台的 cwd 是控制台自己的设置项，桥的 cwd 在宿主配置 cordis.patch.yml 里。
+ * 两者不一致时，控制台会去读一个永远不存在的 qq-runtime.json —— 面板只丢一句「桥：无快照」，
+ * 人根本猜不到是路径问题；同一次不一致还会让日志/收件箱/trace 全读空、能力表写进没人读的目录。
+ *
+ * 机器上常有多个 profile（web / desktop / probe / 备份），所以按证据挑，不是随便取第一个：
+ * 先看**控制台自己所属的 profile**，再看哪个目录里真有 qq-runtime.json（= 桥确实在那儿跑），
+ * 最后才看 yml 的新旧。
+ */
+export function discoverBridgeCwd({ env = process.env, exists = existsSync, readdir = readdirSync, readFile = readFileSync, self = '' } = {}) {
+  const candidates = []
+  const push = (file, cwd) => {
+    const dir = resolve(cwd)
+    if (candidates.some((item) => samePath(item.dir, dir))) return
+    let score = 0
+    if (exists(join(dir, 'qq-runtime.json'))) score += 4
+    if (exists(join(dir, 'qq-sessions.json'))) score += 2
+    if (exists(join(dir, 'qq-inbox.jsonl'))) score += 1
+    if (self !== '' && samePath(dirname(dirname(file)), self)) score += 8
+    let mtime = 0
+    try { mtime = statSync(file).mtimeMs } catch { mtime = 0 }
+    candidates.push({ dir, score, mtime })
+  }
+  for (const root of profileRoots({ env })) {
+    let names = []
+    try { names = readdir(root) } catch { continue }
+    for (const name of names) {
+      const file = join(root, name, 'cordis.patch.yml')
+      if (!exists(file)) continue
+      let text = ''
+      try { text = String(readFile(file, 'utf8')) } catch { continue }
+      const found = bridgeCwdFromYaml(text)
+      if (found !== '') push(file, found)
+    }
+  }
+  if (candidates.length === 0) return ''
+  candidates.sort((a, b) => (b.score - a.score) || (b.mtime - a.mtime))
+  return candidates[0].dir
+}
+
 /** Fill in everything that can be discovered on this machine. */
 export function detectPaths(config = {}, { env = process.env, exists = existsSync, readdir = readdirSync } = {}) {
   const home = env.USERPROFILE || env.HOME || ''
@@ -137,6 +228,9 @@ export function detectPaths(config = {}, { env = process.env, exists = existsSyn
     ...DEFAULTS,
     ...config,
     cwd,
+    // 桥在宿主配置（cordis.patch.yml）里指定的工作目录：控制台 cwd 要与它一致，
+    // 否则运行快照 / 日志 / 能力表全会读错地方（issue #2 的「桥：无快照」就是这么来的）。
+    bridgeCwd: config.bridgeCwd || discoverBridgeCwd({ env, exists, readdir, self: selfProfileDir() }),
     nodeExe: config.nodeExe || process.execPath,
     dshBin,
     napcatBat,
@@ -187,5 +281,9 @@ export function configWarnings(config) {
   else if (!existsSync(config.dshBin)) warnings.push(`dsh bin.js 不存在：${config.dshBin}`)
   if (!config.napcatBat) warnings.push(`找不到 NapCat 启动脚本（napcatBat）：${NAPCAT_BAT_HINT}`)
   if (!config.cwd) warnings.push('未设置宿主工作目录（cwd）')
+  // 控制台 cwd ≠ 桥 cwd：快照/日志读空，能力表写进没人读的目录 —— 必须说出来
+  if (config.cwd && config.bridgeCwd && !samePath(config.cwd, config.bridgeCwd)) {
+    warnings.push(`控制台工作目录（${config.cwd}）和桥的实际工作目录（${config.bridgeCwd}）不一致：运行快照 / 日志会读空、能力表会写进没人读的目录 → 点配置里那个「用桥的目录」一键对齐`)
+  }
   return warnings
 }
