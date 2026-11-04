@@ -765,7 +765,8 @@ export function provider(context) {
     loadCards(root, s)
   } catch { /* 首次建库失败不影响注册 */ }
   void ensureVectors(root, s, cardCache.get(root)?.cards ?? null).catch(() => null)
-  return [makeSearchTool(context), makeReadTool(context)]
+  // provider 契约：必须返回 { tools, sections }。返回裸数组会被 collectProviderAdditions 当成 0 工具（静默跳过）。
+  return { tools: [makeSearchTool(context), makeReadTool(context)] }
 }
 
 export const __internals = {
