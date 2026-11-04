@@ -10,6 +10,7 @@
  * The console only ever touches 127.0.0.1 and requires its token, which is
  * printed on startup (and reused from qq-control.json between runs).
  */
+import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -20,9 +21,18 @@ import { openPanel } from '../lib/open.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
-// 配置文件位置：--config > QQ_CONTROL_CONFIG 环境变量 > 仓库根目录（默认，双击 bat 即可用）。
-// 若以后作为 npm 包装到只读的 node_modules 里，可用前两者指向可写位置。
-const configFile = resolve(argOf('config', process.env.QQ_CONTROL_CONFIG || join(repoRoot, 'qq-control.json')))
+/**
+ * 【本地补丁 7 / 控制台配置同源】配置文件位置：
+ *   --config > QQ_CONTROL_CONFIG > 插件根（存在才用）> <当前工作目录>/qq-control.json。
+ *
+ * 为什么加最后一级：插件铺在 node_modules 里，file: 依赖每次 install 都会重铺整棵树 ——
+ * 写在插件根的 qq-control.json（带 token 与端口）会在下一次 install 时被安静地抹掉。
+ * 双击 control/启动控制台.bat 时 cwd 就是插件根，行为与以前一致。
+ */
+const configArg = argOf('config', String(process.env.QQ_CONTROL_CONFIG ?? '').trim())
+const configFile = resolve(configArg !== ''
+  ? configArg
+  : (existsSync(join(repoRoot, 'qq-control.json')) ? join(repoRoot, 'qq-control.json') : join(process.cwd(), 'qq-control.json')))
 const uiFile = join(here, '..', 'ui.html')
 const accountsUiFile = join(here, '..', 'accounts.html')
 
