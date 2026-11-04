@@ -46,7 +46,7 @@
 
 ## 3. 装完多出什么
 
-### 3.1 工具：47 个（桥内 27 + `ext/` 20）
+### 3.1 工具：49 个（桥内 27 + `ext/` 22）
 
 | 组 | 工具 | 来源 |
 | --- | --- | --- |
@@ -55,6 +55,7 @@
 | 群与成员 | `qq_locate` `qq_member_info` `qq_group_files` `qq_group_albums` `qq_people` `qq_people_note` | 桥 |
 | 识别与检索 | `qq_see_image` `qq_image_search` `qq_kb_search` | 桥 |
 | 记忆与状态 | `qq_memory_note` `qq_memory_fix` `qq_mood` | 桥 |
+| 记忆卡片（语义检索） | `qq_memory_search` `qq_memory_read` | `ext/qq-ext-memory`（2） |
 | 表情（桥内） | `qq_face_list` `qq_face_send` | 桥 |
 | 画图 | `qq_draw_image` | 桥（默认关） |
 | 小屋 | `qq_house_list` `qq_house_read` `qq_house_write` `qq_house_append` `qq_house_edit` `qq_house_mkdir` `qq_house_move` `qq_house_trash` | `ext/qq-ext-house-lite`（8） |
@@ -62,7 +63,7 @@
 | 工作区只读 | `qq_read_file` `qq_list_files` `qq_search_files` | `ext/qq-ext-workspace`（3） |
 | 表情（收藏库） | `qq_face_pick` `qq_face_tag` `qq_face_refresh` | `ext/qq-ext-face`（3，另加 1 段提示） |
 
-`ext/` 的四个包不是补丁，是 **provider 接缝的真实使用者**：它们通过 `ctx.qqBridge.registerToolProvider()` 往每个会话注入工具，完全不碰桥的任何文件。详见 `ext/README.md`。
+`ext/` 的五个包不是补丁，是 **provider 接缝的真实使用者**：它们通过 `ctx.qqBridge.registerToolProvider()` 往每个会话注入工具，完全不碰桥的任何文件。详见 `ext/README.md`。
 
 ### 3.2 七个能力开关（配置键，不是代码分支）
 
@@ -74,7 +75,7 @@
 | `noteToolsEnabled` | true | 不注册 3 个 `qq_note_*` |
 | `peopleToolsEnabled` | true | 不注册 `qq_people*`，同时停掉群友印象落盘 |
 | `groupFileToolEnabled` | true | 不注册 `qq_group_files` / `qq_group_albums` |
-| `extensionToolsEnabled` | **false**（上游默认） | 不调用任何 provider —— `ext/` 四个包一个都不会被接进来 |
+| `extensionToolsEnabled` | **false**（上游默认） | 不调用任何 provider —— `ext/` 五个包一个都不会被接进来（记忆卡片索引仍在 `cwd/_memext`，只是没有工具去查） |
 
 前六个键都在设置面板「能力开关（工具组）」里有独立一行，改完由宿主热重载生效（约 2 秒），改的是配置、不改代码。`extensionToolsEnabled` 必须显式打开，`ext/` 才生效。
 

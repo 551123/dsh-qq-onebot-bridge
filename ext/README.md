@@ -1,6 +1,6 @@
-# ext/ —— 四个 provider 示例包
+# ext/ —— 五个 provider 示例包
 
-这四个包是**扩展接缝的真实使用样本**：它们不修改桥的任何文件，只通过 `ctx.qqBridge.registerToolProvider()` 往每个会话注入工具。放在本分支里，是为了让「第三方能给桥加工具」这件事有可运行的证据，而不是一纸接口。
+这五个包是**扩展接缝的真实使用样本**：它们不修改桥的任何文件，只通过 `ctx.qqBridge.registerToolProvider()` 往每个会话注入工具。放在本分支里，是为了让「第三方能给桥加工具」这件事有可运行的证据，而不是一纸接口。
 
 本目录位于 `patches/<上游 tag>/ext`（当前是 `patches/0.7.5/ext`）。上游 README 的「第三方扩展（社区）」链接指的就是这里 —— 换版时只改 tag，路径结构不变，所以链接始终指向**目录**而不是具体文件。
 
@@ -10,8 +10,9 @@
 | `qq-ext-page-note` | `qq_page_open` `qq_page_grep` `qq_page_read` `qq_note_save` `qq_note_list` `qq_note_read` | 6 | `pageToolsEnabled`、`noteToolsEnabled` |
 | `qq-ext-workspace` | `qq_read_file` `qq_list_files` `qq_search_files` | 3 | `workspaceToolsEnabled`、`cwd` |
 | `qq-ext-face` | `qq_face_pick` `qq_face_tag` `qq_face_refresh` | 3（+1 段提示） | `faceToolsEnabled`、`facePromptSection`、`cwd` |
+| `qq-ext-memory` | `qq_memory_search` `qq_memory_read` | 2 | `cwd`（索引固定落在 `cwd/_memext`，没有开关） |
 
-合计 **20 个工具 + 1 段提示**；桥内仍是 25 个，一起构成 45 个名字。
+合计 **22 个工具 + 1 段提示**；桥内 27 个，一起构成 49 个名字。
 
 现状与上限（`PROVIDER_LIMITS`）：v0.7.0 是单包 8 工具 / 4 段、总量 24 / 12；**v0.7.4 放宽到单包 16 工具 / 4 段、总量 40 / 12**，并且超限不再静默丢弃，改记 `skipped`（面板「实验性」组状态行可见）。小屋包那 8 个当初正好顶在旧上限上，多一个就得拆包——现在不用了。
 
@@ -26,11 +27,11 @@ qq-ext-house-lite/
 
 外壳与实现分开，是因为 **cordis 的 live reload 只重新 apply、不重新 import 已加载模块**：外壳每次 apply 带时间戳重新 import `body.mjs`，于是「改工具 → 碰一下 `cordis.patch.yml` 触发 reload → 新工具生效」不用重启宿主；但改 `index.js` 本身仍要重启。
 
-四个包之间**互不依赖**，也没有加载顺序要求——每次 apply 各拿各的出口、各注册各的工具。
+五个包之间**互不依赖**，也没有加载顺序要求——每次 apply 各拿各的出口、各注册各的工具。
 
 ## 安装
 
-1. 把四个目录复制进宿主插件的同级 `node_modules/`（与 `dsh-qq-onebot-bridge` 同一个目录）。
+1. 把五个目录复制进宿主插件的同级 `node_modules/`（与 `dsh-qq-onebot-bridge` 同一个目录）。
 2. 在 `cordis.patch.yml` 里 `- insert:` 四个 entry：
 
 ```yaml
@@ -43,6 +44,8 @@ qq-ext-house-lite/
       name: qq-ext-page-note
     - id: qq-ext-workspace
       name: qq-ext-workspace
+    - id: qq-ext-memory
+      name: qq-ext-memory
       config:
         cwd: D:/qq-work            # 缺省时依次用宿主给的 workspaceRoot、进程 cwd
     - id: qq-ext-face
