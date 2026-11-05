@@ -12,7 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   PANEL_FLAT_ROWS, PANEL_GROUPS, PANEL_KEYS, PANEL_NEEDS, PANEL_NOTES, PANEL_ROW_BY_KEY, QUIET_MAX_RANGES, extensionStatusLines, normalizeNumberList, normalizeQuietRanges, normalizeRepoUrl, panelFooterLinks, panelFooterLinksWithConsole,
@@ -1154,9 +1154,11 @@ const mountConsole = (running, { flipAfter = 0, withEntry = true } = {}) => {
 // ① 启动计划（纯函数；exists 注入，免得依赖临时目录里真有没有入口文件）
 {
   const plan = consoleLaunchPlan({ root: fakeRoot, execPath: 'C:\\node\\node.exe', exists: () => true })
-  check('consoleLaunchPlan：用宿主自己的 node 跑控制台入口，cwd 指插件根',
+  check('consoleLaunchPlan：用宿主自己的 node 跑控制台入口，cwd 与 --config 都指向配置文件',
     plan.ok === true && plan.command === 'C:\\node\\node.exe'
-    && plan.args.length === 1 && String(plan.args[0]).endsWith('qq-control.mjs') && plan.cwd === fakeRoot,
+    && plan.args.length === 3 && String(plan.args[0]).endsWith('qq-control.mjs')
+    && plan.args[1] === '--config' && String(plan.args[2]).endsWith('qq-control.json')
+    && plan.cwd === dirname(String(plan.args[2])),
     brief(plan))
   const missing = consoleLaunchPlan({ root: join(fakeRoot, 'nope'), exists: () => false })
   check('consoleLaunchPlan：入口不存在时明确拒绝（不假装能起）',
