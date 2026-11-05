@@ -1432,10 +1432,15 @@ export function createSupervisor(config, deps = {}) {
     }
   }
 
+  /** 引擎目录在桥的工作目录下（<bridgeCwd>/image-search），不是插件根 —— 控制台 cwd 是插件根，别混。 */
+  function engineRoot() {
+    return String(config.bridgeCwd || config.cwd || '').trim()
+  }
+
   /** 引擎配置里拿 raw key（只在本进程内用，绝不进返回值）。 */
   function readEngineConfig() {
     const readText = deps.readFile ?? readFileSync
-    const cwd = String(config.cwd ?? '').trim()
+    const cwd = engineRoot()
     if (cwd === '') return { file: '', parsed: null, error: '控制台没有配置 bridgeCwd，定位不到引擎目录' }
     const file = join(cwd, 'image-search', 'config.json')
     try {
@@ -1450,7 +1455,7 @@ export function createSupervisor(config, deps = {}) {
   /** 「识图」页：三路引擎状态 + 额度 + 最近查询（只读）。 */
   function imageSearch() {
     const readText = deps.readFile ?? readFileSync
-    const cwd = String(config.cwd ?? '').trim()
+    const cwd = engineRoot()
     const dir = cwd === '' ? '' : join(cwd, 'image-search')
     const configFile = dir === '' ? '' : join(dir, 'config.json')
     const quotaFile = dir === '' ? '' : join(dir, 'quota.json')
@@ -1505,7 +1510,7 @@ export function createSupervisor(config, deps = {}) {
   function imageSearchWriteKey(input) {
     const body = input !== null && typeof input === 'object' ? input : {}
     const action = body.action === 'clear' ? 'clear' : 'set'
-    const cwd = String(config.cwd ?? '').trim()
+    const cwd = engineRoot()
     if (cwd === '') return { ok: false, reason: '控制台没有配置 bridgeCwd，定位不到引擎目录' }
     const dir = join(cwd, 'image-search')
     const file = join(dir, 'config.json')
