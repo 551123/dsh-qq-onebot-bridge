@@ -1,6 +1,6 @@
 # 本分支相对上游 v0.8.4 做了什么
 
-一句话：`patches/0.8.4` = tag `v0.8.4`（提交 `0d03c5b`）**+ `.gitattributes` + 19 条补丁各一个提交 + `ext/` 五个示例包 + 本文件**。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
+一句话：`patches/0.8.4` = tag `v0.8.4`（提交 `0d03c5b`）**+ `.gitattributes` + 20 条补丁各一个提交 + `ext/` 五个示例包 + 本文件**。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
 
 > 上游仓库：`cheesehaqi/dsh-qq-onebot-bridge`（MIT）。本分支只增加提交，不重写上游历史。
 
@@ -19,7 +19,7 @@
 | `patches/0.8.1` | `v0.8.1` + **逐条导出**（`.gitattributes` + 17 条补丁各一提交 + `ext/` + 本文件），**197 编辑**（补丁库首次在 `patch-02/06/07` 五处按上游 0.8.x 重锚：`bridge:h15`、`supervisor.mjs:h01`/`h13`、`server.mjs:h06`、`ui.html:h14`），末条补丁 `cca1195`（`patch-62`），另有一个 `ext/`+`docs/` 提交 | 归档（0.8.2 起不再前进） |
 | `patches/0.8.2` | `v0.8.2` + **逐条导出**（`.gitattributes` + 18 条补丁各一提交 + `ext/` + 本文件），**183 编辑**（2026-11-03：A 档 15 条链锚合并 197→182，再加 `patch-63` 打包白名单），末条补丁 `93c0be6`（`patch-63`），另有一个 `ext/`+`docs/` 提交 | 归档（0.8.3 起不再前进） |
 | `patches/0.8.3` | `v0.8.3` + **逐条导出**（`.gitattributes` + 18 条补丁各一提交 + `ext/` + 本文件），**194 编辑**（2026-11-04：删 `patch-63` 打包白名单、落图改成「发言人-时分秒」并去掉 `sha` 文件名、人设搬出插件根改读 cwd/环境变量、识图死链清理、控制台加 `imageHint` 表、新增 `patch-64` allowUsers 私聊专用 + 主人行），末条补丁 `f7d9dea`（`patch-64`），另有一个 `ext/`+`docs/` 提交 | 归档（0.8.4 起不再前进） |
-| `patches/0.8.4` | `v0.8.4` + **逐条导出**（`.gitattributes` + 19 条补丁各一提交 + `ext/` + 本文件），**200 编辑**（2026-11-05：上游收编 `allowUsersPrivateOnly`，`patch-64` 从 8 条缩到 2 条、只剩主人行；`patch-04` 防撤回门补 `!== true` 判断；`patch-53` 锚点改「QQ 用户」；`patch-65` 控制台同源 10 条 + 补 `dirname` 导入 1 条），末条补丁 `1dc151a`（`patch-65`），另有一个 `ext/`+`docs/` 提交 | **现役** |
+| `patches/0.8.4` | `v0.8.4` + **逐条导出**（`.gitattributes` + 20 条补丁各一提交 + `ext/` + 本文件），**216 编辑**（2026-11-05：上游收编 `allowUsersPrivateOnly`，`patch-64` 从 8 条缩到 2 条、只剩主人行；`patch-04` 防撤回门补 `!== true` 判断；`patch-53` 锚点改「QQ 用户」；`patch-65` 控制台同源 10 条 + 补 `dirname` 导入 1 条．2026-11-06：新增 `patch-66` 识图三路（trace.moe → Google Lens → Yandex+百度兜底）＋控制台识图页，16 条编辑 / 6 个文件），末条补丁 `420e6b4`（`patch-66`），另有 `ext/`+`docs/` 提交与一次本文档同步 | **现役** |
 
 0.7.0 线是「一个功能一个提交，升级靠 `git rebase v新tag`」。0.7.4 线**没有沿用这个形态**：0.7.4 动了断句区与白名单时机，正好压在 17 个功能提交的锚点上，逐条 rebase 等于把每条冲突都重解一遍。所以改成用补丁器的 `tools/fork-export.mjs` 从补丁库全量重导；0.7.5 / 0.7.7 / 0.7.8 / 0.7.9 / 0.7.10 沿用同一条做法（换版时补丁库重锚，fork 侧只重导）。
 
@@ -31,15 +31,15 @@
 
 | 项 | 数量 |
 | --- | --- |
-| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 19 条补丁（各一个提交）；`ext/` 与本文件合成一个提交。总数以 `git rev-list --count v0.8.4..HEAD` 为准（**21**） |
+| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 20 条补丁（各一个提交）；`ext/` 与本文件合成一个提交。总数以 `git rev-list --count v0.8.4..HEAD` 为准（**23**，含 `patch-66` 之后的两次文档同步） |
 | 改动文件（不含 `ext/`） | 24 个改动 + `.gitattributes` |
 | `ext/` | 5 个包 / 16 个文件（每包 `index.js` + `body.mjs` + `package.json`，外加 `README.md`） |
-| 增删行（不含 `ext/` 与本文） | **+11309 / −1725**，25 个文件（含 `.gitattributes`） |
+| 增删行（不含 `ext/` 与本文） | **+11779 / −1720**，25 个文件（含 `.gitattributes`） |
 | `ext/` 增删行 | **+3 145**，16 个文件 |
 | 仓库自身文件 | `.gitattributes` 是**替换**上游同名文件（+1 / −22）；仓库没有 `.gitignore` 改动。`ext/` 里的 `qq-*` 目录会被上游 `.gitignore` 的 `qq-*/` 盯上，**新增 ext 包要用 `git add -f`**（本分支的 16 个文件是用 `git checkout` 显式带入的） |
-| 来源 | 补丁库 `QQ助手补丁\patches\`：**19 条补丁 / 200 条编辑 / 24 个源文件** |
+| 来源 | 补丁库 `QQ助手补丁\patches\`：**20 条补丁 / 216 条编辑 / 24 个源文件** |
 
-改动最集中的文件（增 / 删行）：`lib/bridge.js` +7043 / −1614、`control/ui.html` +1111 / −4、`lib/archive.js` +875 / −2、`lib/faces.js` +378 / −8、`lib/onebot.js` +372 / −12、`control/lib/supervisor.mjs` +340 / −5、`control/lib/perf.mjs` +205 / −0、`lib/sticker-index.js` +159 / −0、`lib/index.js` +146 / −1、`lib/dice.js` +135 / −18、`control/lib/config.mjs` +102 / −1、`test/archive-unit.mjs` +85 / −4、`lib/panel.js` +73 / −8、`test/onebot-api-unit.mjs` +58 / −0、`control/lib/server.mjs` +48 / −0、`lib/broadcast.js` +38 / −1、`lib/napcat-launch.js` +31 / −4、`test/find-unit.mjs` +15 / −0、`control/bin/qq-control.mjs` +13 / −3、`lib/settings-routes.js` +13 / −2、`control/lib/diagnose.mjs` +9 / −1、`lib/imagegen.js` +8 / −4、`lib/trace.js` +2 / −0。
+改动最集中的文件（增 / 删行）：`lib/bridge.js` +7151 / −1609、`control/ui.html` +1248 / −4、`lib/archive.js` +875 / −2、`control/lib/supervisor.mjs` +536 / −5、`lib/faces.js` +378 / −8、`lib/onebot.js` +372 / −12、`control/lib/perf.mjs` +205 / −0、`lib/sticker-index.js` +159 / −0、`lib/index.js` +149 / −1、`lib/dice.js` +135 / −18、`control/lib/config.mjs` +102 / −1、`test/archive-unit.mjs` +85 / −4、`lib/panel.js` +76 / −8、`control/lib/server.mjs` +71 / −0、`test/onebot-api-unit.mjs` +58 / −0、`lib/settings-routes.js` +57 / −10、`lib/broadcast.js` +38 / −1、`lib/napcat-launch.js` +31 / −4、`test/find-unit.mjs` +15 / −0、`control/bin/qq-control.mjs` +13 / −3、`control/lib/diagnose.mjs` +9 / −1、`lib/imagegen.js` +8 / −4、`test/settings-unit.mjs` +5 / −3、`lib/trace.js` +2 / −0。
 
 > 上游 0.8.4 把 `allowUsersPrivateOnly` 收编进 schema 与面板；我们的 6 条实现被删，`patch-64` 只剩主人行两条。上游 0.8.4 的 `control/` 改动（账号中心）与补丁面不重叠。
 
@@ -145,9 +145,9 @@ node -e "console.log(require('./package.json').version)"              # 0.8.3（
 7. provider 回调**出错要抛**，不要 `return { tools: [], sections: [], reason }` —— 后者在上游眼里是「成功但空」，面板上看着一切正常、实际上一个工具都没接进来（0.7.0 分支末尾那条 `fix(ext)` 就是修这个）。
 8. `ext/` 的四个包目录名是 `qq-ext-*`，会被桥的 `.gitignore` 里那条**无锚点**的 `qq-*/`（本意是拦根目录运行产物）整目录吞掉：`git add -A ext` 只进 `README.md`，12 个源文件静默跳过。已用 `!ext/qq-*/` 反选修好，别把这条删了。
 
-## 7. 提交清单（`v0.8.4..HEAD`，21 个提交）
+## 7. 提交清单（`v0.8.4..HEAD`，23 个提交）
 
-编号 1 是行尾固定（`.gitattributes`），2–20 是 19 条补丁逐条落地，第 21 条是本文件与 `ext/` 的提交（其哈希无法写进自己，故留占位）。
+编号 1 是行尾固定（`.gitattributes`），2–20 是 `patch-01` … `patch-65` 逐条落地，第 21 条是 `ext/` 与本文件，第 22 条是 `patch-66`（识图三路），第 23 条是 `patch-66` 之后的文档同步（其哈希无法写进自己，故留占位）。
 
 | # | 提交 | 内容 |
 | --- | --- | --- |
@@ -171,7 +171,9 @@ node -e "console.log(require('./package.json').version)"              # 0.8.3（
 | 18 | `b3eb2da` | patch-62 二维码路径候选（NapCatQQ Desktop 的 ProgramData 位置） |
 | 19 | `ee2ed28` | patch-64 补丁64 主人行（allowUsersPrivateOnly 已由上游 v0.8.4 实现） |
 | 20 | `1dc151a` | patch-65 补丁65 控制台配置文件同源（启动参数 + 六处读取） |
-| 21 | `（本条提交）` | feat(ext)+docs: `ext/` 五个扩展包、本文 0.8.4 口径、`docs/上游0.8.4适配.md` |
+| 21 | `63e3401` | feat(ext)+docs: `ext/` 五个扩展包、本文 0.8.4 口径、`docs/上游0.8.4适配.md` |
+| 22 | `420e6b4` | patch-66 补丁66 识图三路（trace.moe → Google Lens → Yandex+百度兜底 · 控制台识图页） |
+| 23 | `（本条提交）` | docs: `PATCHES.md` 补 0.8.4 线 patch-66 口径（20 条 / 216 编辑 / 23 提交） |
 
 ## 8. 0.7.8 这一版的差异（相对 0.7.7 线 · 历史）
 
@@ -388,6 +390,6 @@ session ready qq-fb68fad4…
 
 另修一个潜伏 bug：`patch-65` 的 `test:h65-plan` 用了 `dirname(...)`，补丁库从没加 `dirname` 导入（线上文件是手工补的），干净树重放会 `ReferenceError`。补第 11 条 `test:h65-dirname-import`。
 
-最终：**19 条 / 200 编辑 / 24 文件**；`--verify` 0/200/0；`reanchor` 非 exact 20（基线内 20、基线外 0，目标已改 `v0840`）；逐字节重放断点 0；guards 21/0；settings 291/2（已知两条）；全量 sweep 4352 passed / 12 failed（9 套已知、白名单外 0）；structure 24 文件 / 私有成员 407；快照 154 文件。
+最终：**19 条 / 200 编辑 / 24 文件**（2026-11-05 换版当时读数）；`--verify` 0/200/0；`reanchor` 非 exact 20（基线内 20、基线外 0，目标已改 `v0840`）；逐字节重放断点 0；guards 21/0；settings 291/2（已知两条）；全量 sweep 4352 passed / 12 failed（9 套已知、白名单外 0）；structure 24 文件 / 私有成员 407；快照 154 文件。
 
 细节见 `docs/上游0.8.4适配.md`（本仓）与补丁库 `QQ助手补丁/docs/2026-11-05-上游v0.8.4迁移方案.md`。
