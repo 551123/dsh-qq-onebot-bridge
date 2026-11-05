@@ -1,0 +1,13 @@
+{
+  "name": "qq-ext-face",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./body.mjs": "./body.mjs"
+  },
+  "description": "收藏表情（QQ 我的表情）5 个工具 + 1 段提示：list / pick / send / tag / refresh",
+  "license": "MIT"
+}
