@@ -1,6 +1,6 @@
 # 本分支相对上游 v0.8.5 做了什么
 
-一句话：`patches/0.8.5` = tag `v0.8.5`（提交 `4578a00`）**+ `.gitattributes` + 23 条补丁各一个提交 + 一条识图裁切追补 + `ext/` 五个示例包 + 本文件**（当前 `v0.8.5..HEAD` = 30 提交）。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
+一句话：`patches/0.8.5` = tag `v0.8.5`（提交 `4578a00`）**+ `.gitattributes` + 23 条补丁各一个提交 + 一条识图裁切追补 + `ext/` 五个示例包 + 本文件**（当前 `v0.8.5..HEAD` = 31 提交）。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
 
 > 上游仓库：`cheesehaqi/dsh-qq-onebot-bridge`（MIT）。本分支只增加提交，不重写上游历史。
 
@@ -32,7 +32,7 @@
 
 | 项 | 数量 |
 | --- | --- |
-| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 22 条补丁（各一个提交）；`ext/` 与本文件合成一个提交。总数以 `git rev-list --count v0.8.5..HEAD` 为准（**30**：`.gitattributes` + 23 条补丁 + `ext/` 与本文件合成的一条 + `patch-66` 识图裁切追补 + 三次读数同步 `30a5314`/`7454e32`/`7188498` + `patch-67` 人设丙 + `patch-69` lifecycle + `patch-68` 视频 + 本文件这次读数同步） |
+| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 22 条补丁（各一个提交）；`ext/` 与本文件合成一个提交。总数以 `git rev-list --count v0.8.5..HEAD` 为准（**31**：`.gitattributes` + 23 条补丁 + `ext/` 与本文件合成的一条 + `patch-66` 识图裁切追补 + 三次读数同步 `30a5314`/`7454e32`/`7188498` + `patch-67` 人设丙 + `patch-69` lifecycle + `patch-68` 视频 + 本文件这次读数同步） |
 | 改动文件（不含 `ext/`） | 24 个改动 + `.gitattributes` |
 | `ext/` | 5 个包 / 16 个文件（每包 `index.js` + `body.mjs` + `package.json`，外加 `README.md`） |
 | 增删行（不含 `ext/` 与本文） | **+11784 / −1720**，25 个文件（含 `.gitattributes`） |
@@ -148,9 +148,9 @@ node -e "console.log(require('./package.json').version)"              # 0.8.3（
 7. provider 回调**出错要抛**，不要 `return { tools: [], sections: [], reason }` —— 后者在上游眼里是「成功但空」，面板上看着一切正常、实际上一个工具都没接进来（0.7.0 分支末尾那条 `fix(ext)` 就是修这个）。
 8. `ext/` 的四个包目录名是 `qq-ext-*`，会被桥的 `.gitignore` 里那条**无锚点**的 `qq-*/`（本意是拦根目录运行产物）整目录吞掉：`git add -A ext` 只进 `README.md`，12 个源文件静默跳过。已用 `!ext/qq-*/` 反选修好，别把这条删了。
 
-## 7. 提交清单（`v0.8.5..HEAD`，30 个提交）
+## 7. 提交清单（`v0.8.5..HEAD`，31 个提交）
 
-编号 1 是行尾固定（`.gitattributes`），2–21 是 `patch-01`…`patch-66` 逐条落地（按补丁 id 升序），第 22 条是 `ext/` 与本文件（连同 `docs/上游0.8.5适配.md`）。第 23 条是 2026-11-07 的 `patch-66` 追补（识图裁切语义与分级措辞；按 `docs/fork迁移.md` §13 末条，不改版本、不重导，只在链尾追加），第 24 条是本文件把读数从 22 同步到 24，第 25 条是 2026-11-08 的 `patch-67` 人设丙（同样只追链尾），第 26 条把读数同步到 26，第 27 条是同日 `patch-69`（botOnline 认 lifecycle：SnowLuma 不发 bot_online notice），第 28 条把读数同步到 28，第 29 条是同日 `patch-68` 入站视频（落盘 + ffprobe + 九宫格 + `qq_see_video`），第 30 条是本文件把读数同步到 30。
+编号 1 是行尾固定（`.gitattributes`），2–21 是 `patch-01`…`patch-66` 逐条落地（按补丁 id 升序），第 22 条是 `ext/` 与本文件（连同 `docs/上游0.8.5适配.md`）。第 23 条是 2026-11-07 的 `patch-66` 追补（识图裁切语义与分级措辞；按 `docs/fork迁移.md` §13 末条，不改版本、不重导，只在链尾追加），第 24 条是本文件把读数从 22 同步到 24，第 25 条是 2026-11-08 的 `patch-67` 人设丙（同样只追链尾），第 26 条把读数同步到 26，第 27 条是同日 `patch-69`（botOnline 认 lifecycle：SnowLuma 不发 bot_online notice），第 28 条把读数同步到 28，第 29 条是同日 `patch-68` 入站视频（落盘 + ffprobe + 九宫格 + `qq_see_video`），第 30 条是本文件把读数同步到 30。第 31 条是同日 `patch-03` 的去敏残留修正（线上 `lib/dice.js` 注释里的「示例角色」改回「米白鲸」）。
 
 | # | 提交 | 内容 |
 | --- | --- | --- |
@@ -183,7 +183,8 @@ node -e "console.log(require('./package.json').version)"              # 0.8.3（
 | 27 | `60c1868` | patch-69 补丁69 botOnline 认 lifecycle（SnowLuma 不发 bot_online notice） |
 | 28 | `7188498` | docs: `PATCHES.md` / `docs/上游0.8.5适配.md` 读数同步（27 → 28） |
 | 29 | `084834a` | patch-68 补丁68 入站视频：落盘 + ffprobe + 九宫格 + `qq_see_video`（群聊只在 @ 或自主回合下载；超 25MB 只留元数据） |
-| 30 | `（本条提交）` | docs: `PATCHES.md` / `docs/上游0.8.5适配.md` 读数同步（28 → 30） |
+| 30 | `9176a26` | docs: `PATCHES.md` / `docs/上游0.8.5适配.md` 读数同步（28 → 30） |
+| 31 | `dce6122` | fix: 补丁 03 去敏残留「示例角色」改回「米白鲸」（`lib/dice.js` 注释） |
 
 
 ## 8. 0.7.8 这一版的差异（相对 0.7.7 线 · 历史）
