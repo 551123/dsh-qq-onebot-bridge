@@ -348,3 +348,208 @@ export function groupsView(runtime, { now = Date.now() } = {}) {
     note: '开关的生效值来自桥写的运行快照；要改开关请改插件配置（profile 的 cordis.patch.yml）。',
   }
 }
+
+// ------------------------------------------------ 本地补丁 15 · 工具参考页 ----
+
+/**
+ * 【本地补丁 15 · 工具参考页】从 lib/bridge.js 源码抽 qq_* 工具目录。
+ *
+ * 口径与 tools/qq-tools.mjs 的 catalog（补丁 14 的 CLI）**故意保持一致**：
+ * 只看 name: 'qq_...' 这一行，描述取其后 40 行内第一处 description: 的首行，
+ * 去掉包裹引号与尾随逗号/拼接符，截到 140 字符。同一名字只留第一次出现。
+ * 这是给人看的参考页，不是运行时真相（真正注册在 lib/bridge.js 的 #installSession）。
+ */
+export function extractToolCatalog(source) {
+  const text = source === null || source === undefined ? '' : String(source)
+  const lines = text.split('\n')
+  const out = []
+  const seen = new Set()
+  for (let i = 0; i < lines.length; i++) {
+    const hit = /name: '(qq_[a-z_0-9]+)'/.exec(lines[i])
+    if (hit === null) continue
+    if (seen.has(hit[1])) continue
+    seen.add(hit[1])
+    let description = ''
+    for (let j = i + 1; j < Math.min(lines.length, i + 40); j++) {
+      const desc = /description: (.*)$/.exec(lines[j])
+      if (desc === null) continue
+      description = desc[1]
+        .replace(/^[\u0060'"]/, '')
+        .replace(/[,\u0060'"]?,?$/, '')
+        .replace(/\s*\+\s*$/, '')
+        .trim()
+      break
+    }
+    out.push({ name: hit[1], description: description.slice(0, 140) })
+  }
+  return out
+}
+
+/**
+ * 【本地补丁 15 · 工具参考页】lib/bridge.js #toolRuleFor（补丁 14）的展示用镜像。
+ *
+ * 真放行用的是桥里的私有方法；这里只回答「这个会话命中了哪条规则」。
+ * 语义必须与桥一致，两边由 tools/test-tools-view.mjs 交叉验证：命中顺序
+ * 精确键 → g:<群号>（群内按人分会话时兜一层）→ default；allow 存在（哪怕空数组）
+ * = 只放行列出的，否则 deny = 拦下列出的；allow 与 deny 同时给时 allow 优先。
+ */
+export function toolRuleFor(table, key) {
+  const chats = table !== null && typeof table === 'object' && table.chats !== null && typeof table.chats === 'object'
+    ? table.chats
+    : {}
+  const text = key === null || key === undefined ? '' : String(key)
+  const parts = text.split(':')
+  const candidates = [text]
+  if (parts[0] === 'g' && parts.length > 2) candidates.push('g:' + parts[1])
+  let entry = null
+  for (const candidate of candidates) {
+    const hit = chats[candidate]
+    if (hit !== null && typeof hit === 'object') { entry = hit; break }
+  }
+  if (entry === null && table !== null && table.default !== null && typeof table.default === 'object') entry = table.default
+  if (entry === null) return null
+  const allow = Array.isArray(entry.allow)
+    ? entry.allow.filter((item) => typeof item === 'string' && item !== '')
+    : null
+  const deny = Array.isArray(entry.deny)
+    ? entry.deny.filter((item) => typeof item === 'string' && item !== '')
+    : null
+  if (allow === null && deny === null) return null
+  return allow !== null ? { mode: 'allow', names: allow } : { mode: 'deny', names: deny }
+}
+
+/** 【本地补丁 15 · 工具参考页】这条规则是从哪一层命中的（给人看的来源标注）。 */
+export function toolRuleSource(table, key) {
+  if (table === null || typeof table !== 'object') return '—'
+  const chats = table.chats !== null && typeof table.chats === 'object' ? table.chats : {}
+  const text = key === null || key === undefined ? '' : String(key)
+  const parts = text.split(':')
+  const candidates = [text]
+  if (parts[0] === 'g' && parts.length > 2) candidates.push('g:' + parts[1])
+  for (const candidate of candidates) {
+    const hit = chats[candidate]
+    if (hit !== null && typeof hit === 'object') return candidate === text ? '精确键' : candidate
+  }
+  return 'default'
+}
+
+/** 表里配过的所有键（用来提醒"配了但还没有对应会话"）。 */
+function tableKeys(table) {
+  if (table === null || typeof table !== 'object') return []
+  const chats = table.chats !== null && typeof table.chats === 'object' ? table.chats : {}
+  return Object.keys(chats).sort()
+}
+
+/**
+ * 这条表键是否真的用得上：等于某个会话键，或者是某个会话键的前缀层
+ * （例：表里配了 g:100，而真实会话键是 g:100:u:7 —— 这层会被回落命中，不算闲置）。
+ */
+function keyInUse(tableKey, sessionKeys) {
+  const needle = String(tableKey)
+  for (const sessionKey of sessionKeys) {
+    const text = String(sessionKey)
+    if (text === needle) return true
+    if (text.startsWith(needle + ':')) return true
+  }
+  return false
+}
+
+/**
+ * 【本地补丁 15 · 工具参考页】把目录 + 表 + 会话键拼成页面数据（纯函数）。
+ *
+ * 输入全是已读到的数据（控制台进程读文件，纯函数只做计算）：
+ *   catalog      extractToolCatalog(lib/bridge.js 源码)
+ *   table        <cwd>/qq-tools.json 解析结果且 enabled === true 时才是对象，否则 null
+ *   sessionKeys  <cwd>/qq-sessions.json 里的会话键（g:/u: 开头）
+ */
+export function toolsView(input = {}) {
+  const catalog = Array.isArray(input.catalog) ? input.catalog : []
+  const table = input.table === null || input.table === undefined ? null : input.table
+  const sessionKeys = Array.isArray(input.sessionKeys) ? input.sessionKeys : []
+  const rules = sessionKeys.map((key) => {
+    const rule = toolRuleFor(table, key)
+    return {
+      key: String(key),
+      mode: rule === null ? '不限' : rule.mode,
+      names: rule === null ? [] : rule.names,
+      source: rule === null ? '—' : toolRuleSource(table, key),
+    }
+  })
+  const missing = tableKeys(table).filter((key) => !keyInUse(key, sessionKeys))
+  const warnings = [input.catalogError, input.tableError, input.sessionsError]
+    .filter((item) => typeof item === 'string' && item !== '')
+  return {
+    generatedAt: Number(input.generatedAt) || 0,
+    toolCount: catalog.length,
+    tools: catalog,
+    tableEnabled: table !== null,
+    tableFile: String(input.tableFile ?? ''),
+    sessionsFile: String(input.sessionsFile ?? ''),
+    ruleCount: rules.filter((row) => row.mode !== '不限').length,
+    rules,
+    missing,
+    warnings,
+    note: '本页只读：生效值由桥在会话创建时读取（补丁 14），改表请用 tools/qq-tools.mjs。',
+  }
+}
+
+/**
+ * 【本地补丁 17 · 令牌与花费】把 <cwd>/qq-usage-summary.json 整理成页面数据（纯函数）。
+ *
+ * 控制台是独立进程，读不到桥内存；金额的定价只实现一次（在桥里），这里只做**排版与兜底**：
+ * 文件不在（还没花过钱 / 桥没跑过）= 合法的空表，不是错误。
+ */
+export function usageView(input = {}) {
+  const summary = input.summary === null || input.summary === undefined || typeof input.summary !== 'object' ? null : input.summary
+  const warnings = [input.summaryError].filter((item) => typeof item === 'string' && item !== '')
+  if (summary === null) {
+    return {
+      generatedAt: Number(input.generatedAt) || 0,
+      file: String(input.summaryFile ?? ''),
+      ledgerFile: String(input.ledgerFile ?? ''),
+      empty: true,
+      totals: { cny: 0, steps: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      today: null,
+      week: 0,
+      days: [],
+      chats: [],
+      models: [],
+      warnings,
+      note: '还没有账本：桥会在模型完成一步后写一行到 qq-usage.jsonl，再用 /用量 或在控制台刷新查看。',
+    }
+  }
+  const list = (value) => (Array.isArray(value) ? value : [])
+  const totals = summary.totals === null || summary.totals === undefined ? {} : summary.totals
+  const days = list(summary.days)
+  const day = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10)
+  let today = null
+  for (const row of days) {
+    if (String(row.date ?? '') === day) today = row
+  }
+  let week = 0
+  for (const row of days.slice(0, 7)) week += Number(row.cny) || 0
+  return {
+    generatedAt: Number(input.generatedAt) || 0,
+    file: String(input.summaryFile ?? ''),
+    ledgerFile: String(input.ledgerFile ?? summary.file ?? ''),
+    empty: false,
+    ledgerLines: Number(summary.ledgerLines) || 0,
+    totals: {
+      cny: Number(totals.cny) || 0,
+      steps: Number(totals.steps) || 0,
+      input: Number(totals.input) || 0,
+      output: Number(totals.output) || 0,
+      cacheRead: Number(totals.cacheRead) || 0,
+      cacheWrite: Number(totals.cacheWrite) || 0,
+      total: Number(totals.total) || 0,
+    },
+    today,
+    week,
+    days,
+    chats: list(summary.chats),
+    models: list(summary.models),
+    warnings,
+    note: String(summary.note ?? ''),
+  }
+}
+
