@@ -1398,6 +1398,205 @@ export function createSupervisor(config, deps = {}) {
     return { ok: true, url: `http://127.0.0.1:${port}/webui/?token=${encodeURIComponent(token)}`, reason: '' }
   }
 
+  // ---- 本地补丁 19c：「识图」页（三路引擎状态 / key 写入 / 余额探针）----
+  // 控制台是独立进程，读不到桥内存，所以这里的唯一数据源是引擎目录里的文件：
+  //   <cwd>/image-search/config.json   引擎配置（含 SerpApi key —— 返回值永远只给打码预览）
+  //   <cwd>/image-search/quota.json    Lens 月/日额度（引擎自己预扣、失败回滚）
+  //   <cwd>/image-search/logs/search.jsonl  每次查询一行（含 grade 与每路状态）
+  /** key 打码：只留前 4 与后 4，中间固定长度，够认人但抄不走。 */
+  function maskSearchKey(key) {
+    const text = String(key ?? '')
+    if (text === '') return ''
+    if (text.length <= 12) return text.slice(0, 2) + '****'
+    return text.slice(0, 4) + '****' + text.slice(-4)
+  }
+
+  /** 日志一行 → 面板要的最小字段（引擎日志里 engines 已经是精简过的，这里再兜一层）。 */
+  function summarizeSearchLine(line) {
+    const engines = Array.isArray(line?.engines) ? line.engines : []
+    return {
+      at: String(line?.ts ?? ''),
+      chat: line?.chat === 'private' ? '私聊' : '群',
+      chatKey: String(line?.chatKey ?? ''),
+      grade: String(line?.grade ?? ''),
+      title: String(line?.title ?? ''),
+      cached: line?.cached === true,
+      cropped: line?.crop?.applied === true,
+      ms: Number(line?.ms ?? 0),
+      engines: engines.map((engine) => ({
+        n: String(engine?.n ?? ''),
+        st: String(engine?.st ?? ''),
+        why: String(engine?.why ?? ''),
+        ms: Number(engine?.ms ?? 0),
+      })),
+    }
+  }
+
+  /** 引擎目录在桥的工作目录下（<bridgeCwd>/image-search），不是插件根 —— 控制台 cwd 是插件根，别混。 */
+  function engineRoot() {
+    return String(config.bridgeCwd || config.cwd || '').trim()
+  }
+
+  /** 引擎配置里拿 raw key（只在本进程内用，绝不进返回值）。 */
+  function readEngineConfig() {
+    const readText = deps.readFile ?? readFileSync
+    const cwd = engineRoot()
+    if (cwd === '') return { file: '', parsed: null, error: '控制台没有配置 bridgeCwd，定位不到引擎目录' }
+    const file = join(cwd, 'image-search', 'config.json')
+    try {
+      const parsed = JSON.parse(readText(file, 'utf8'))
+      return { file, parsed: parsed !== null && typeof parsed === 'object' ? parsed : null, error: '' }
+    } catch (error) {
+      if (error !== null && error !== undefined && error.code === 'ENOENT') return { file, parsed: null, error: '' }
+      return { file, parsed: null, error: 'config.json 读取/解析失败：' + (error?.code ?? error?.message ?? 'unknown') }
+    }
+  }
+
+  /** 「识图」页：三路引擎状态 + 额度 + 最近查询（只读）。 */
+  function imageSearch() {
+    const readText = deps.readFile ?? readFileSync
+    const cwd = engineRoot()
+    const dir = cwd === '' ? '' : join(cwd, 'image-search')
+    const configFile = dir === '' ? '' : join(dir, 'config.json')
+    const quotaFile = dir === '' ? '' : join(dir, 'quota.json')
+    const logFile = dir === '' ? '' : join(dir, 'logs', 'search.jsonl')
+    const engine = readEngineConfig()
+    const apiKey = String(engine.parsed?.lens?.apiKey ?? '').trim()
+    let quota = null
+    let quotaError = ''
+    try {
+      quota = JSON.parse(readText(quotaFile, 'utf8'))
+    } catch (error) {
+      if (!(error !== null && error !== undefined && error.code === 'ENOENT')) quotaError = 'quota.json 读取/解析失败：' + (error?.code ?? error?.message ?? 'unknown')
+    }
+    let recent = []
+    let logError = ''
+    let logLines = 0
+    try {
+      const raw = readText(logFile, 'utf8')
+      const all = raw.split('\n').filter((line) => line.trim() !== '')
+      logLines = all.length
+      recent = all.slice(-12).reverse().map((line) => {
+        try { return summarizeSearchLine(JSON.parse(line)) } catch { return null }
+      }).filter((item) => item !== null)
+    } catch (error) {
+      if (!(error !== null && error !== undefined && error.code === 'ENOENT')) logError = 'logs/search.jsonl 读取失败：' + (error?.code ?? error?.message ?? 'unknown')
+    }
+    return {
+      ok: true,
+      engineDir: dir,
+      exists: dir !== '' && existsSync(dir),
+      configFile,
+      quotaFile,
+      logFile,
+      keyConfigured: apiKey !== '',
+      keyPreview: maskSearchKey(apiKey),
+      pythonHint: 'python',
+      configError: engine.error,
+      quota,
+      quotaError,
+      logLines,
+      logError,
+      recent,
+      generatedAt: now(),
+    }
+  }
+
+  /**
+   * 「识图」页：写入 / 清除 SerpApi key。
+   * 四种情况都要成立：目录不在→建目录；文件不在→建文件；有文件但没 lens 段→补；已有 key→只换 apiKey。
+   * 其它键（trace.upload.cache）一律原样保留 —— 这里只碰一个字段，不重建整个配置。
+   */
+  function imageSearchWriteKey(input) {
+    const body = input !== null && typeof input === 'object' ? input : {}
+    const action = body.action === 'clear' ? 'clear' : 'set'
+    const cwd = engineRoot()
+    if (cwd === '') return { ok: false, reason: '控制台没有配置 bridgeCwd，定位不到引擎目录' }
+    const dir = join(cwd, 'image-search')
+    const file = join(dir, 'config.json')
+    const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
+    if (action === 'set' && (apiKey.length < 16 || /\s/.test(apiKey))) {
+      return { ok: false, reason: 'key 看起来不对：至少 16 个字符，中间不能有空格（SerpApi 的 key 是 64 位十六进制）' }
+    }
+    const engine = readEngineConfig()
+    if (engine.error !== '') return { ok: false, reason: engine.error }
+    let previous = ''
+    try { previous = (deps.readFile ?? readFileSync)(file, 'utf8') } catch { previous = '' }
+    const current = engine.parsed ?? {}
+    const next = { ...current }
+    next.lens = { ...(current.lens !== null && typeof current.lens === 'object' ? current.lens : {}) }
+    next.lens.apiKey = action === 'clear' ? '' : apiKey
+    const text = JSON.stringify(next, null, 2) + '\n'
+    try {
+      mkdirSync(dir, { recursive: true })
+      if (previous !== '') {
+        try { writeFileSync(file + '.bak', previous, 'utf8') } catch { /* 备份失败不阻止保存 */ }
+      }
+      const tmp = file + '.tmp-' + process.pid
+      writeFileSync(tmp, text, 'utf8')
+      renameSync(tmp, file)
+    } catch (error) {
+      return { ok: false, reason: '写入失败：' + (error?.code ?? error?.message ?? 'unknown') }
+    }
+    return {
+      ok: true,
+      reason: action === 'clear' ? '已清除 key（Lens 这一路会跳过，另外两路照常）' : '已保存 key（Lens 下一张图就能用）',
+      ...imageSearch(),
+    }
+  }
+
+  /**
+  * 「识图」页：真实剩余额度探针（只读，不消耗额度）。
+  *   · SerpApi GET /account?api_key= → plan_searches_left / total_searches_left / this_month_usage
+  *   · trace.moe GET /me → quota / quotaUsed（窗口语义官方没写明，原样展示）
+  * 任何一路失败都只标那一路，不影响另一路。
+  */
+  async function imageSearchProbe() {
+    const state = imageSearch()
+    const out = { ok: true, generatedAt: now(), serpapi: { ok: false, reason: '没有配置 key（或配置读不出来）' }, trace: { ok: false, reason: '未查询' } }
+    const engine = readEngineConfig()
+    const apiKey = String(engine.parsed?.lens?.apiKey ?? '').trim()
+    if (apiKey !== '') {
+      try {
+        const response = await fetch('https://serpapi.com/account?api_key=' + encodeURIComponent(apiKey), { signal: AbortSignal.timeout(12000) })
+        const body = await response.json().catch(() => null)
+        if (response.ok && body !== null && typeof body === 'object') {
+          out.serpapi = {
+            ok: true,
+            planSearchesLeft: Number(body.plan_searches_left ?? body.total_searches_left ?? 0),
+            totalSearchesLeft: Number(body.total_searches_left ?? 0),
+            thisMonthUsage: Number(body.this_month_usage ?? 0),
+            rateLimitPerHour: Number(body.account_rate_limit_per_hour ?? 0),
+          }
+        } else {
+          out.serpapi = { ok: false, reason: 'HTTP ' + response.status + (body && body.error ? '：' + body.error : '') }
+        }
+      } catch (error) {
+        out.serpapi = { ok: false, reason: '请求失败：' + String(error?.message ?? error).slice(0, 160) }
+      }
+    }
+    try {
+      const response = await fetch('https://api.trace.moe/me', { signal: AbortSignal.timeout(12000) })
+      const body = await response.json().catch(() => null)
+      if (response.ok && body !== null && typeof body === 'object' && body.error === undefined) {
+        out.trace = {
+          ok: true,
+          priority: Number(body.priority ?? 0),
+          concurrency: Number(body.concurrency ?? 0),
+          quota: Number(body.quota ?? 0),
+          quotaUsed: Number(body.quotaUsed ?? 0),
+          note: '窗口语义以官方为准：这里只原样展示 /me 返回的数字',
+        }
+      } else {
+        out.trace = { ok: false, reason: 'HTTP ' + response.status }
+      }
+    } catch (error) {
+      out.trace = { ok: false, reason: '请求失败：' + String(error?.message ?? error).slice(0, 160) }
+    }
+    out.localQuota = state.quota
+    out.localConfigFile = state.configFile
+    return out
+  }
   return {
     status, startHost, stopHost, freePort, startNapcat, stopNapcat, startTts, stopTts, stopAll,
     restartNapcatLogin, napcatDetect, qr, napcatWebui,
@@ -1408,6 +1607,8 @@ export function createSupervisor(config, deps = {}) {
     traceEvents, traceChain, runtime, diagnose, exportBundle, acceptance,
     inboxList, replay, inject, clearQueue, archiveStats, archiveSearch,
     perf, jobsView, groups, qqTools, qqUsage, qqCaps, qqCapsWrite, personaRead, personaWrite,
+    // 补丁 19c：三路识图（状态 / key 写入 / 余额探针）
+    imageSearch, imageSearchWriteKey, imageSearchProbe,
     // 每个调用方（每个 SSE 连接）拿一份独立 tailer：共用模块级单例会让两个面板互相"偷"事件，
     // 也会让同一进程里的第二个 supervisor 读到别人的事件文件。
     tailer: () => createTraceTailer(config.logs?.trace ?? ''),
