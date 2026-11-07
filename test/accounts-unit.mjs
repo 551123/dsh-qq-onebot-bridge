@@ -149,12 +149,14 @@ check('正常 → ok', classifyWebUiFailure({ status: 200, payload: { code: 0, d
 
 // ---------- ⑤ createAccountsApi ----------
 {
-  const api = createAccountsApi({ webUiFile: webuiFile, napcatBat: '', fetchImpl: makeMockNapcat().fetchImpl })
-  const summary = api.summary()
+  // 侧别写死 napcat：auto 会去探本机端口，装了 SnowLuma 的机器上这组断言会翻车
+  const api = createAccountsApi({ protocolSide: 'napcat', webUiFile: webuiFile, napcatBat: '', fetchImpl: makeMockNapcat().fetchImpl })
+  // summary 从 P70 起要现探侧别，改成 await（页面路由也 await）
+  const summary = await api.summary()
   check('★summary 带账号清单但不带 token', summary.accounts.length === 2 && !JSON.stringify(summary).includes('testtoken123'), brief(summary.webui))
   const status = await api.status()
   check('api.status 走真实链路（mock）', status.ok === true)
-  const noConfig = createAccountsApi({ webUiFile: join(dir, 'nope.json') })
+  const noConfig = createAccountsApi({ protocolSide: 'napcat', webUiFile: join(dir, 'nope.json') })
   const missing = await noConfig.status()
   check('★没有配置时不发请求、直接说原因', missing.ok === false && missing.kind === 'no-config' && /没找到 webui\.json/.test(missing.message), brief(missing))
 }

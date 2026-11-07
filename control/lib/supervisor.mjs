@@ -1624,7 +1624,13 @@ export function createSupervisor(config, deps = {}) {
     napcatQrFile: () => config.napcatQr ?? '',
     traceStats,
     // v0.7.11：账号中心（本地网站）。每次调用都重读 webui.json —— 用户可能刚在别处改过 token/端口。
-    accounts: createAccountsApi({ napcatBat: config.napcatBat }),
+    accounts: createAccountsApi({
+      napcatBat: config.napcatBat,
+      // 侧别与 SnowLuma 的路径/口令：账号中心自己判 auto，这里只传配置
+      protocolSide: config.protocolSide,
+      snowlumaDir: config.snowlumaDir,
+      snowlumaSecretFile: config.snowlumaSecretFile,
+    }),
     traceEvents, traceChain, runtime, diagnose, exportBundle, acceptance,
     inboxList, replay, inject, clearQueue, archiveStats, archiveSearch,
     perf, jobsView, groups, qqTools, qqUsage, qqCaps, qqCapsWrite, personaRead, personaWrite,

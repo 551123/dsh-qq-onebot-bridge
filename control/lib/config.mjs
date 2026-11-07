@@ -37,6 +37,10 @@ const DEFAULTS = {
   dshBin: '',
   napcatBat: '',
   napcatQr: '',
+  // 协议端：auto = 看谁在听端口（NapCat 6099 / SnowLuma 5099）；写死也只影响账号中心这一层
+  protocolSide: 'auto',
+  snowlumaDir: '',
+  snowlumaSecretFile: '',
   ttsBat: '',
   pluginRoot: '',
   logs: { hostOut: '', hostErr: '', bridge: '' },
@@ -222,6 +226,9 @@ export function detectPaths(config = {}, { env = process.env, exists = existsSyn
     napcatBat ? join(dirname(napcatBat), 'cache', 'qrcode.png') : '',
     process.platform === 'win32' ? 'C:\\ProgramData\\NapCatQQ Desktop\\components\\NapCatQQ\\cache\\qrcode.png' : '',
   ])
+  // SnowLuma（@snowluma/runtime）不是 NapCat 的插件，而是另一个协议端；账号中心要能在两者之间切换。
+  // 只探测安装根：**在不在跑**由 accounts.mjs 现探端口决定（配置在 ≠ 进程在）。
+  const snowlumaDir = firstExisting([config.snowlumaDir, env.SNOWLUMA_HOME])
   const ttsBat = firstExisting([
     config.ttsBat,
     cwd ? join(cwd, 'GPT-SoVITS', 'TTS控制.bat') : '',
@@ -238,6 +245,10 @@ export function detectPaths(config = {}, { env = process.env, exists = existsSyn
     dshBin,
     napcatBat,
     napcatQr,
+    // 侧别：显式 napcat/snowluma 才写死，其它一律回到 auto（端口探测）
+    protocolSide: config.protocolSide === 'napcat' || config.protocolSide === 'snowluma' ? config.protocolSide : 'auto',
+    snowlumaDir,
+    snowlumaSecretFile: typeof config.snowlumaSecretFile === 'string' ? config.snowlumaSecretFile : '',
     ttsBat,
     logs: {
       hostOut: config.logs?.hostOut || (cwd ? join(cwd, 'qq-host-out.log') : ''),

@@ -252,7 +252,8 @@ server.close()
   check('面板引用的元素 id 都存在', missingIds.length === 0, missingIds.join(','))
 
   const serverSource = readFileSync(new URL('../control/lib/server.mjs', import.meta.url), 'utf8')
-  const uiRoutes = [...new Set([...script.matchAll(/['"`](\/api\/[a-z/]+)/g)].map((match) => match[1]))]
+  // 字符类要带 '-'：/api/qq-caps、/api/image-search 这种前缀会被截成 /api/qq、/api/image 假报缺失
+  const uiRoutes = [...new Set([...script.matchAll(/['"`](\/api\/[a-z/-]+)/g)].map((match) => match[1]))]
   const missingRoutes = uiRoutes.filter((route) => !serverSource.includes(`'${route}'`))
   check('面板调用的接口都在服务端注册', missingRoutes.length === 0, missingRoutes.join(','))
   check('面板调用了调试接口（trace/diagnose/export）', ['/api/trace', '/api/diagnose', '/api/export'].every((route) => uiRoutes.includes(route)), uiRoutes.join(' '))
@@ -283,7 +284,9 @@ server.close()
   // issue #2 的现场：用户按报错里的 "shimFile" 去文件夹翻了五小时。这两件事必须在界面上说清。
   check('★配置卡片说清「填 launcher.bat 而不是 napcat.bat」与「垫片/日志在工作目录里现写」',
     ui.includes('bootmain\\launcher.bat') && ui.includes('qq-napcat-launch.cmd')
-    && ui.includes('不在插件安装包里') && ui.includes('placeholder="…\\NapCat\\bootmain\\launcher.bat"'),
+    && ui.includes('不在插件安装包里')
+    // 补丁 34 把占位符扩成「launcher.bat，或 NapCatQQ-Desktop.exe」，这里只认前缀
+    && ui.includes('placeholder="…\\NapCat\\bootmain\\launcher.bat'),
     '配置卡片提示')
   /**
    * ★ 2026-10-16 真机事故（「启动完以后就是个页面没法进行任何互动」）：
