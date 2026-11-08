@@ -1,6 +1,6 @@
 # 本分支相对上游 v0.8.5 做了什么
 
-一句话：`patches/0.8.5` = tag `v0.8.5`（提交 `4578a00`）**+ `.gitattributes` + 25 条补丁各一个提交 + 一条识图裁切追补 + `ext/` 五个示例包 + 本文件**（当前 `v0.8.5..HEAD` = 38 提交）。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
+一句话：`patches/0.8.5` = tag `v0.8.5`（提交 `4578a00`）**+ `.gitattributes` + 26 条补丁各一个提交 + 一条识图裁切追补 + `ext/` 五个示例包 + 本文件**（当前 `v0.8.5..HEAD` = 40 提交）。检出的工作区就是可直接运行的完整源码，没有补丁器、没有 JSON 锚点、没有二次拼装。
 
 > 上游仓库：`cheesehaqi/dsh-qq-onebot-bridge`（MIT）。本分支只增加提交，不重写上游历史。
 
@@ -32,15 +32,15 @@
 
 | 项 | 数量 |
 | --- | --- |
-| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 22 条补丁（各一个提交）；`ext/` 与本文件合成一个提交。总数以 `git rev-list --count v0.8.5..HEAD` 为准（**38**：`.gitattributes` + 25 条补丁 + `ext/` 与本文件合成的一条 + `patch-66` 识图裁切追补 + 三次读数同步 `30a5314`/`7454e32`/`7188498` + `patch-67` 人设丙 + `patch-69` lifecycle + `patch-68` 视频 + `patch-70` 协议端可切换 + `patch-71` 会话自动轮换与门控决策落盘 + `47941df` 读数同步 + `patch-71` 读数同步 `1019a68` + `718537d` 被叫到判据统一（回写补丁库，未重导）+ 本文件这次读数同步（37 → 38）） |
-| 改动文件（不含 `ext/`） | 24 个改动 + `.gitattributes` |
+| 提交 | 由 `fork-export` 逐条生成：`.gitattributes` + 22 条补丁（各一个提交）；`ext/` 与本文件合成一个提交。总数以 `git rev-list --count v0.8.5..HEAD` 为准（**40**：`.gitattributes` + 26 条补丁 + `ext/` 与本文件合成的一条 + `patch-66` 识图裁切追补 + 三次读数同步 `30a5314`/`7454e32`/`7188498` + `patch-67` 人设丙 + `patch-69` lifecycle + `patch-68` 视频 + `patch-70` 协议端可切换 + `patch-71` 会话自动轮换与门控决策落盘 + `47941df` 读数同步 + `patch-71` 读数同步 `1019a68` + `718537d` 被叫到判据统一（回写补丁库，未重导）+ `patch-72` 判据归一（`#bareAtGate` / `#nativeVision`，`9571c38`）+ 本文件这次读数同步（38 → 40）） |
+| 改动文件（不含 `ext/`） | 36 个改动 + `.gitattributes` |
 | `ext/` | 5 个包 / 16 个文件（每包 `index.js` + `body.mjs` + `package.json`，外加 `README.md`） |
-| 增删行（不含 `ext/` 与本文） | **+11784 / −1720**，25 个文件（含 `.gitattributes`） |
+| 增删行（不含 `ext/` 与本文） | **+13546 / −1793**，37 个文件（含 `.gitattributes`） |
 | `ext/` 增删行 | **+3 145**，16 个文件 |
 | 仓库自身文件 | `.gitattributes` 是**替换**上游同名文件（+1 / −22）；仓库没有 `.gitignore` 改动。`ext/` 里的 `qq-*` 目录会被上游 `.gitignore` 的 `qq-*/` 盯上，**新增 ext 包要用 `git add -f`**（本分支的 16 个文件是用 `git checkout` 显式带入的） |
-| 来源 | 补丁库 `QQ助手补丁\patches\`：**25 条补丁 / 290 条编辑 / 35 个源文件** |
+| 来源 | 补丁库 `QQ助手补丁\patches\`：**26 条补丁 / 297 条编辑 / 36 个源文件** |
 
-改动最集中的文件（增 / 删行）：`lib/bridge.js` +7151 / −1609、`control/ui.html` +1248 / −4、`lib/archive.js` +875 / −2、`control/lib/supervisor.mjs` +548 / −6、`lib/faces.js` +378 / −8、`lib/onebot.js` +372 / −12、`control/lib/perf.mjs` +205 / −0、`lib/sticker-index.js` +159 / −0、`lib/index.js` +149 / −1、`lib/dice.js` +135 / −18、`control/lib/config.mjs` +113 / −1、`control/lib/accounts.mjs` +498 / −9、`control/accounts.html` +20 / −5、`test/archive-unit.mjs` +85 / −4、`lib/panel.js` +76 / −8、`control/lib/server.mjs` +72 / −1、`test/onebot-api-unit.mjs` +58 / −0、`lib/settings-routes.js` +57 / −10、`lib/broadcast.js` +38 / −1、`lib/napcat-launch.js` +31 / −4、`test/find-unit.mjs` +15 / −0、`control/bin/qq-control.mjs` +13 / −3、`control/lib/diagnose.mjs` +9 / −1、`lib/imagegen.js` +8 / −4、`test/settings-unit.mjs` +5 / −3、`test/accounts-snowluma-unit.mjs` +276 / −0、`test/accounts-unit.mjs` +5 / −3、`test/console-debug-unit.mjs` +5 / −2、`test/accounts-api-unit.mjs` +2 / −1、`test/accounts-http-unit.mjs` +2 / −1、`lib/trace.js` +2 / −0。
+改动最集中的文件（增 / 删行）：`lib/bridge.js` +7808 / −1656、`control/ui.html` +1248 / −4、`lib/archive.js` +875 / −2、`control/lib/supervisor.mjs` +548 / −6、`lib/faces.js` +378 / −8、`lib/onebot.js` +372 / −12、`control/lib/perf.mjs` +205 / −0、`lib/sticker-index.js` +159 / −0、`lib/index.js` +149 / −1、`lib/dice.js` +135 / −18、`control/lib/config.mjs` +113 / −1、`control/lib/accounts.mjs` +498 / −9、`control/accounts.html` +20 / −5、`test/archive-unit.mjs` +85 / −4、`lib/panel.js` +76 / −8、`control/lib/server.mjs` +72 / −1、`test/onebot-api-unit.mjs` +58 / −0、`lib/settings-routes.js` +57 / −10、`lib/broadcast.js` +38 / −1、`lib/napcat-launch.js` +31 / −4、`test/find-unit.mjs` +15 / −0、`control/bin/qq-control.mjs` +13 / −3、`control/lib/diagnose.mjs` +9 / −1、`lib/imagegen.js` +8 / −4、`test/settings-unit.mjs` +5 / −3、`test/accounts-snowluma-unit.mjs` +276 / −0、`test/accounts-unit.mjs` +5 / −3、`test/console-debug-unit.mjs` +5 / −2、`test/accounts-api-unit.mjs` +2 / −1、`test/accounts-http-unit.mjs` +2 / −1、`lib/trace.js` +2 / −0、`test/predicate-units-unit.mjs` +33 / −0。
 
 > 上游 0.8.4 把 `allowUsersPrivateOnly` 收编进 schema 与面板；我们的 6 条实现被删，`patch-64` 只剩主人行两条。上游 0.8.4 的 `control/` 改动（账号中心）与补丁面不重叠。
 >
@@ -148,9 +148,9 @@ node -e "console.log(require('./package.json').version)"              # 0.8.3（
 7. provider 回调**出错要抛**，不要 `return { tools: [], sections: [], reason }` —— 后者在上游眼里是「成功但空」，面板上看着一切正常、实际上一个工具都没接进来（0.7.0 分支末尾那条 `fix(ext)` 就是修这个）。
 8. `ext/` 的四个包目录名是 `qq-ext-*`，会被桥的 `.gitignore` 里那条**无锚点**的 `qq-*/`（本意是拦根目录运行产物）整目录吞掉：`git add -A ext` 只进 `README.md`，12 个源文件静默跳过。已用 `!ext/qq-*/` 反选修好，别把这条删了。
 
-## 7. 提交清单（`v0.8.5..HEAD`，38 个提交）
+## 7. 提交清单（`v0.8.5..HEAD`，40 个提交）
 
-编号 1 是行尾固定（`.gitattributes`），2–21 是 `patch-01`…`patch-66` 逐条落地（按补丁 id 升序），第 22 条是 `ext/` 与本文件（连同 `docs/上游0.8.5适配.md`）。第 23 条是 2026-11-07 的 `patch-66` 追补（识图裁切语义与分级措辞；按 `docs/fork迁移.md` §13 末条，不改版本、不重导，只在链尾追加），第 24 条是本文件把读数从 22 同步到 24，第 25 条是 2026-11-08 的 `patch-67` 人设丙（同样只追链尾），第 26 条把读数同步到 26，第 27 条是同日 `patch-69`（botOnline 认 lifecycle：SnowLuma 不发 bot_online notice），第 28 条把读数同步到 28，第 29 条是同日 `patch-68` 入站视频（落盘 + ffprobe + 九宫格 + `qq_see_video`），第 30 条是本文件把读数同步到 30。第 31 条是同日 `patch-03` 的去敏残留修正（线上 `lib/dice.js` 注释里的「示例角色」改回「米白鲸」），第 32 条是同日的一次读数同步（把 31 写进本文件与适配文档），第 33 条是同日 `patch-70` 协议端可切换（账号页认 SnowLuma），第 34 条是本文件把读数同步到 34，第 35 条是同日 `patch-71` 会话自动轮换 + 门控决策落盘（`lib/bridge.js`/`inbox.js`/`index.js`/`trace.js` + 单测），第 36 条是本文件把读数同步到 36。第 37 条是同日「被叫到」判据统一：群里点名/唤醒词与字面 @ 走同一个 `addressedToBot()`，三处调用 + 一条单测。这一条**没有**变成 `patch-72`，而是当天回写进它真正所属的 `patch-03`（`bridge:h11`）、`patch-44`（E3 回合组装）、`patch-68`（视频分支）与 `patch-71`（`addressedToBot` 定义 + `test/addressing-unit.mjs`）；补丁库因此是 25 条 / 290 编辑 / 35 个源文件。本分支不重导、不 force-push：HEAD 的树本来就等于线上，历史里的 `718537d` 如实记录了这次修复，下次换版重导时提交自然收敛成「一条补丁一次成型」。第 38 条是本文件把读数同步到 38。
+编号 1 是行尾固定（`.gitattributes`），2–21 是 `patch-01`…`patch-66` 逐条落地（按补丁 id 升序），第 22 条是 `ext/` 与本文件（连同 `docs/上游0.8.5适配.md`）。第 23 条是 2026-11-07 的 `patch-66` 追补（识图裁切语义与分级措辞；按 `docs/fork迁移.md` §13 末条，不改版本、不重导，只在链尾追加），第 24 条是本文件把读数从 22 同步到 24，第 25 条是 2026-11-08 的 `patch-67` 人设丙（同样只追链尾），第 26 条把读数同步到 26，第 27 条是同日 `patch-69`（botOnline 认 lifecycle：SnowLuma 不发 bot_online notice），第 28 条把读数同步到 28，第 29 条是同日 `patch-68` 入站视频（落盘 + ffprobe + 九宫格 + `qq_see_video`），第 30 条是本文件把读数同步到 30。第 31 条是同日 `patch-03` 的去敏残留修正（线上 `lib/dice.js` 注释里的「示例角色」改回「米白鲸」），第 32 条是同日的一次读数同步（把 31 写进本文件与适配文档），第 33 条是同日 `patch-70` 协议端可切换（账号页认 SnowLuma），第 34 条是本文件把读数同步到 34，第 35 条是同日 `patch-71` 会话自动轮换 + 门控决策落盘（`lib/bridge.js`/`inbox.js`/`index.js`/`trace.js` + 单测），第 36 条是本文件把读数同步到 36。第 37 条是同日「被叫到」判据统一：群里点名/唤醒词与字面 @ 走同一个 `addressedToBot()`，三处调用 + 一条单测。这一条**没有**变成 `patch-72`，而是当天回写进它真正所属的 `patch-03`（`bridge:h11`）、`patch-44`（E3 回合组装）、`patch-68`（视频分支）与 `patch-71`（`addressedToBot` 定义 + `test/addressing-unit.mjs`）；补丁库因此是 25 条 / 290 编辑 / 35 个源文件。本分支不重导、不 force-push：HEAD 的树本来就等于线上，历史里的 `718537d` 如实记录了这次修复，下次换版重导时提交自然收敛成「一条补丁一次成型」。第 38 条是本文件把读数同步到 38。第 39 条是同日 `patch-72` 判据归一：裸 @ 判据收进 `#bareAtGate(message)`（只服务「只发语音」与「纯 @ 固定短句」两条路，:3178 的 addressedToBot 更宽、不并入），native 多模态收进 `#nativeVision()`（引用图 / 图片 / 视频三处），加 `test/predicate-units-unit.mjs` 钉住调用点数量；补丁库因此是 26 条 / 297 编辑 / 36 个源文件。注意第 37 条的 atMe 判据是**回写旧补丁**、没有新增补丁；本条是**新增链尾补丁**，两者不是同一件事。第 40 条是本文件把读数同步到 40（补 39 与 297 编辑）。
 
 | # | 提交 | 内容 |
 | --- | --- | --- |
@@ -191,7 +191,9 @@ node -e "console.log(require('./package.json').version)"              # 0.8.3（
 | 35 | `d68c118` | feat: P71 会话自动轮换 + 门控决策落盘（`#turns` 计数达 `sessionRotateTurns` 换会话；门控 `why` 落 `qq-inbox.jsonl`） |
 | 36 | `1019a68` | docs: `PATCHES.md` / 上游适配文档读数同步（34 → 36，补 `patch-71`） |
 | 37 | `718537d` | fix(bridge): 被叫到判据统一到 `addressedToBot`（三处调用 + 单测）；同日回写 `patch-03/44/68/71`，本分支不重导 |
-| 38 | 本条 | docs: `PATCHES.md` / `docs/上游0.8.5适配.md` 读数同步（37 → 38；补 290 编辑 / 35 文件与回写说明） |
+| 38 | `d440623` | docs: `PATCHES.md` / `docs/上游0.8.5适配.md` 读数同步（37 → 38；补 290 编辑 / 35 文件与回写说明） |
+| 39 | `9571c38` | feat(bridge): `patch-72` 判据归一（`#bareAtGate` / `#nativeVision`，+ 单测） |
+| 40 | 本条 | docs: 读数同步（38 → 40；26 条补丁 / 297 编辑 / 36 文件） |
 
 
 ## 8. 0.7.8 这一版的差异（相对 0.7.7 线 · 历史）
