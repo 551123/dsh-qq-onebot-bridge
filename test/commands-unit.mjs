@@ -67,6 +67,7 @@ const imageFile = join(baseDir, 'pic.png')
 writeFileSync(imageFile, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
 
 const config = Config({
+  sessionRotateTurns: 0,   // 【P71】本套在同一个群连发几十条：关掉自动换会话，否则 resume 段之前会话就被换掉了
   cwd: baseDir,
   allowUsers: [1001, 1002],
   allowGroups: [2002],
