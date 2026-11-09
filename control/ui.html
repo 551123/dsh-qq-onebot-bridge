@@ -346,6 +346,21 @@
   </section>
 
   <section class="card forkcard" style="grid-column:1/-1" data-tab="data">
+    <h2>识图 · 三路引擎 <span class="meta" id="imageSearchMeta">（trace.moe → Google Lens → Yandex + 百度兜底；引擎与配置在 &lt;cwd&gt;/image-search/，本页只读写这几个文件）</span></h2>
+    <div class="row">
+      <button onclick="loadImageSearch()">刷新</button>
+      <button onclick="probeImageSearch()">查真实余额</button>
+      <span class="meta" id="imageSearchState"></span>
+    </div>
+    <div class="row">
+      <input id="lensKeyInput" type="password" autocomplete="off" placeholder="SerpApi key（google_lens 用，形如 64 位十六进制；只写进本机 config.json，不回显、不进日志）" style="flex:1;min-width:320px" />
+      <button onclick="saveLensKey()">保存 key</button>
+      <button onclick="clearLensKey()">清除 key</button>
+    </div>
+    <pre id="imageSearchOut">（点「刷新」看三路引擎状态、本月/今日额度与最近几次查询）</pre>
+  </section>
+
+  <section class="card forkcard" style="grid-column:1/-1" data-tab="data">
     <h2>用量与花费 <span class="meta" id="usageMeta">（按会话归集的 token 与金额估算；只读，数据来自桥写的 qq-usage-summary.json）</span></h2>
     <div class="row">
       <button onclick="loadUsage()">刷新</button>
@@ -2343,6 +2358,126 @@ async function loadTools() {
 }
 
 
+// ---- 补丁 19c：识图页（三路引擎状态 / key 写入 / 真实余额）----
+const IMAGE_SEARCH_GRADE_LABELS = {
+  exact_source: '出处已确定',
+  same_scene: '同一场景（集数仅供参考）',
+  visual_match: '只找到相似画面 / 页面',
+  character_only: '只有相似图 / 角色线索',
+  not_found: '没查到',
+};
+const IMAGE_SEARCH_ENGINE_LABELS = { trace: 'trace.moe', lens: 'Google Lens', yandex: 'Yandex', baidu: '百度' };
+const IMAGE_SEARCH_STATE_LABELS = { hit: '查到', miss: '没查到', skipped: '跳过', error: '失败' };
+function imageSearchEngineCell(engine) {
+  const name = IMAGE_SEARCH_ENGINE_LABELS[engine.n] ?? engine.n;
+  const st = IMAGE_SEARCH_STATE_LABELS[engine.st] ?? engine.st;
+  const color = engine.st === 'hit' ? '#8fd18f' : (engine.st === 'error' ? '#e0a0a0' : (engine.st === 'miss' ? '#e0c080' : '#9a9a9a'));
+  const why = engine.why === '' ? '' : '（' + engine.why + '）';
+  return '<span style="color:' + color + '">' + capsEsc(name) + ' ' + capsEsc(st) + capsEsc(why) + '</span>';
+}
+function imageSearchTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return capsEsc(String(ts));
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+async function loadImageSearch() {
+  const out = document.getElementById('imageSearchOut');
+  const state = document.getElementById('imageSearchState');
+  if (out !== null) out.style.whiteSpace = 'normal';
+  try {
+    const r = await api('/api/image-search');
+    if (r.ok !== true) {
+      if (out !== null) out.innerHTML = '<span style="color:#e0a0a0">读取失败：' + capsEsc(r.reason ?? '') + '</span>';
+      return;
+    }
+    if (state !== null) state.textContent = '生成于 ' + imageSearchTime(r.generatedAt);
+    const quota = r.quota ?? null;
+    const dayCap = Number(quota?.dayCap ?? 0);
+    const head = [
+      '<div class="meta">引擎目录：' + capsEsc(r.engineDir || '（控制台没配 bridgeCwd，定位不到）')
+        + '｜' + (r.exists ? '已创建' : '**还不存在**（第一次查图或保存 key 时由引擎/本页创建）') + '</div>',
+      '<div class="meta">Lens key：' + (r.keyConfigured
+        ? '<span style="color:#8fd18f">已配置 ' + capsEsc(r.keyPreview) + '</span>'
+        : '<span style="color:#e0c080">未配置（Lens 这一路会跳过；trace.moe 与 Yandex/百度 照常）</span>')
+        + '｜配置文件：' + capsEsc(r.configFile || '—') + '</div>',
+      '<div class="meta">额度（引擎本地账本）：本月 ' + Number(quota?.used ?? 0) + '/' + Number(quota?.limit ?? 250)
+        + '，今日 ' + Number(quota?.dayUsed ?? 0) + '/' + (dayCap > 0 ? dayCap : '不限') + '</div>',
+    ].join('');
+    const errors = [r.configError, r.quotaError, r.logError].filter((item) => item);
+    const errorBox = errors.length === 0 ? '' : '<div class="meta" style="color:#e0a0a0">' + capsEsc(errors.join('；')) + '</div>';
+    const recent = Array.isArray(r.recent) ? r.recent : [];
+    const rows = recent.map((row) => {
+      const engines = (Array.isArray(row.engines) ? row.engines : []).map(imageSearchEngineCell).join(' · ');
+      const grade = IMAGE_SEARCH_GRADE_LABELS[row.grade] ?? (row.grade || '—');
+      const title = row.title === '' ? '' : '<div class="meta">' + capsEsc(row.title) + '</div>';
+      return '<tr><td style="white-space:nowrap">' + imageSearchTime(row.at) + '</td>'
+        + '<td>' + capsEsc(row.chat) + (row.chatKey ? '<div class="meta">' + capsEsc(row.chatKey) + '</div>' : '') + '</td>'
+        + '<td>' + capsEsc(grade) + title + '</td>'
+        + '<td>' + (row.cached ? '缓存' : '实查') + (row.cropped ? ' / 已裁' : '') + '</td>'
+        + '<td style="white-space:nowrap">' + Math.round(Number(row.ms ?? 0)) + 'ms</td>'
+        + '<td>' + engines + '</td></tr>';
+    }).join('');
+    const table = rows === ''
+      ? '<div class="meta">（还没有查询记录：引擎日志是 ' + capsEsc(r.logFile || '—') + '）</div>'
+      : '<table><thead><tr><th>时间</th><th>会话</th><th>结果分级</th><th>缓存/裁切</th><th>耗时</th><th>三路引擎</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    const note = '<div class="meta">读法：trace.moe 命中＝同一段画面（集数可信，秒数看 gap）；Google Lens 精确匹配＝出处；Lens 只有相似图＝候选；Yandex/百度＝哪些页面用过这张图，只能当线索；「没查到」就是没查到，不会拿相似图硬凑。上一次查询的 Yandex/百度结果在模型回复里，这里只统计状态。</div>';
+    if (out !== null) out.innerHTML = head + errorBox + table + note;
+  } catch (error) {
+    if (out !== null) out.innerHTML = '<span style="color:#e0a0a0">读取失败：' + capsEsc(error.message) + '</span>';
+  }
+}
+async function probeImageSearch() {
+  const out = document.getElementById('imageSearchOut');
+  const state = document.getElementById('imageSearchState');
+  if (state !== null) state.textContent = '正在查 SerpApi / trace.moe …';
+  try {
+    const r = await api('/api/image-search/probe');
+    if (state !== null) state.textContent = '';
+    const serp = r.serpapi ?? {};
+    const trace = r.trace ?? {};
+    const serpText = serp.ok === true
+      ? '剩余 ' + Number(serp.planSearchesLeft ?? 0) + ' 次（套餐）｜累计剩余 ' + Number(serp.totalSearchesLeft ?? 0)
+        + '｜本月已用 ' + Number(serp.thisMonthUsage ?? 0) + '｜限速 ' + Number(serp.rateLimitPerHour ?? 0) + ' 次/小时'
+      : '不可用：' + (serp.reason ?? '未知');
+    const traceText = trace.ok === true
+      ? 'quota ' + Number(trace.quota ?? 0) + '／已用 ' + Number(trace.quotaUsed ?? 0)
+        + '｜并发 ' + Number(trace.concurrency ?? 0) + '｜优先级 ' + Number(trace.priority ?? 0) + '（窗口语义以官方为准）'
+      : '不可用：' + (trace.reason ?? '未知');
+    const box = '<div class="meta">真实余额（' + imageSearchTime(r.generatedAt) + '）：</div>'
+      + '<div class="meta">· SerpApi / Google Lens：' + capsEsc(serpText) + '</div>'
+      + '<div class="meta">· trace.moe：' + capsEsc(traceText) + '</div>'
+      + '<div class="meta">· 引擎本地账本仍以「刷新」里那份为准：探针不扣额度，本地账本才是引擎拦调用用的数。</div>';
+    if (out !== null) out.innerHTML = box + (out.innerHTML ?? '');
+  } catch (error) {
+    if (state !== null) state.textContent = '';
+    if (out !== null) out.innerHTML = '<span style="color:#e0a0a0">探针失败：' + capsEsc(error.message) + '</span>';
+  }
+}
+async function saveLensKey() {
+  const input = document.getElementById('lensKeyInput');
+  const key = input === null ? '' : String(input.value ?? '').trim();
+  if (key === '') { toast('⚠️ 先把 key 粘进输入框'); return; }
+  try {
+    const r = await api('/api/image-search/key', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apiKey: key }) });
+    toast((r.ok ? '✅ ' : '⚠️ ') + (r.reason ?? ''));
+    if (r.ok === true && input !== null) input.value = '';
+    await loadImageSearch();
+  } catch (error) {
+    toast('⚠️ 保存失败：' + error.message);
+  }
+}
+async function clearLensKey() {
+  if (!window.confirm('清除本机的 SerpApi key？Lens 这一路会跳过，trace.moe 与 Yandex/百度 照常。')) return;
+  try {
+    const r = await api('/api/image-search/key', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'clear' }) });
+    toast((r.ok ? '✅ ' : '⚠️ ') + (r.reason ?? ''));
+    await loadImageSearch();
+  } catch (error) {
+    toast('⚠️ 清除失败：' + error.message);
+  }
+}
+
 async function loadGroups() {
   const out = document.getElementById('groupsOut');
   const state = document.getElementById('groupsState');
@@ -2508,6 +2643,7 @@ loadArchive();
 loadPerf();
 loadJobs();
 loadTools();
+loadImageSearch();
 loadUsage();
 loadGroups();
 runDiagnose();
@@ -2524,6 +2660,7 @@ setInterval(() => { if (!document.hidden) loadHealthHistory(false); }, 30000);
   // 定时任务/群配置变化慢，自动刷新频率低一些（也不在页面不可见时空转）
   setInterval(() => { if (!document.hidden) loadJobs(); }, 20000);
   setInterval(() => { if (!document.hidden) loadTools(); }, 60000);
+  setInterval(() => { if (!document.hidden) loadImageSearch(); }, 60000);
   setInterval(() => { if (!document.hidden) loadUsage(); }, 60000);
   setInterval(() => { if (!document.hidden) loadGroups(); }, 30000);
 }

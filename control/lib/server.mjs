@@ -265,6 +265,24 @@ export function createControlServer({ config, token, api, ui = '', uiFile = '', 
         json(response, 200, await api.qqUsage())
         return
       }
+      // 补丁 19c「识图」页：三路引擎状态 + 额度 + 最近查询（数据全部来自 <cwd>/image-search/ 下的文件）。
+      if (request.method === 'GET' && path === '/api/image-search/probe') {
+        if (typeof api.imageSearchProbe !== 'function') {
+          json(response, 200, { ok: false, reason: '当前控制台不支持识图余额探针' })
+          return
+        }
+        json(response, 200, await api.imageSearchProbe())
+        return
+      }
+      if (request.method === 'GET' && path === '/api/image-search') {
+        if (typeof api.imageSearch !== 'function') {
+          json(response, 200, { ok: false, reason: '当前控制台不支持识图页' })
+          return
+        }
+        json(response, 200, await api.imageSearch())
+        return
+      }
+
       // 补丁 28「插件能力」页：C 组 + B 组表文件（读与写都进 supervisor，这里只做路由）。
       if (request.method === 'GET' && path === '/api/qq-caps') {
         if (typeof api.qqCaps !== 'function') {
@@ -829,6 +847,11 @@ export function createControlServer({ config, token, api, ui = '', uiFile = '', 
           '/api/qq-caps': () => {
             if (typeof api.qqCapsWrite !== 'function') return { ok: false, reason: '当前控制台不支持插件能力写入' }
             return api.qqCapsWrite(body)
+          },
+          // 补丁 19c：识图页写入 / 清除 SerpApi key（原子写 + .bak；key 只进本机文件，不回传）
+          '/api/image-search/key': () => {
+            if (typeof api.imageSearchWriteKey !== 'function') return { ok: false, reason: '当前控制台不支持识图 key 写入' }
+            return api.imageSearchWriteKey(body)
           },
           // 补丁 56：人设正文写入（去 BOM / CRLF→LF / 长度上限 / 原子写 + 备份都在 supervisor）
           '/api/persona': () => {
