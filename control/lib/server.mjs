@@ -361,7 +361,7 @@ export function createControlServer({ config, token, api, ui = '', uiFile = '', 
           json(response, 200, { ok: false, reason: '当前控制台不支持账号中心' })
           return
         }
-        json(response, 200, api.accounts.summary())
+        json(response, 200, await api.accounts.summary())
         return
       }
       if (request.method === 'GET' && path === '/api/accounts/status') {

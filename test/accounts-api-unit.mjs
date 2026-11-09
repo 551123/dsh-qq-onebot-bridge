@@ -58,7 +58,8 @@ const fakeExec = (command, args) => {
   return ''
 }
 
-const realAccounts = createAccountsApi({ webUiFile: webuiFile })
+// 侧别写死 napcat：这组测的是 NapCat 面，不能受本机装没装 SnowLuma 影响
+const realAccounts = createAccountsApi({ protocolSide: 'napcat', webUiFile: webuiFile })
 const api = {
   accounts: {
     ...realAccounts,

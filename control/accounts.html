@@ -813,7 +813,8 @@
   /** 目标元素可能已经被删掉（比如登录分区已移除），这里做静默跳过。 */
   const setText = (id, value) => { const el = $(id); if (el) el.textContent = value }
 
-  const KIND = { ok: '正常', 'no-config': '没有配置', unreachable: '连不上（NapCat 没在运行）', unauthorized: 'token 被拒', unsupported: '这个版本没有该接口', 'need-2fa': '需要 2FA', error: '出错' }
+  // 'no-secret' 只在 SnowLuma 侧出现：它用密码认证，口令在服务端的 snowlumaSecretFile 里
+  const KIND = { ok: '正常', 'no-config': '没有配置', unreachable: '连不上（协议端没在运行）', unauthorized: '口令 / token 被拒', unsupported: '这个协议端没有该接口', 'need-2fa': '需要 2FA', 'no-secret': 'SnowLuma 没配口令', 'rate-limited': '登录尝试过多', error: '出错' }
   const busy = (btn, on, label) => {
     if (!btn) return
     if (on) { btn.dataset.label = btn.textContent; btn.textContent = label ?? '处理中…'; btn.disabled = true }
@@ -874,7 +875,14 @@
     const webui = data.webui ?? {}
     const degraded = data.degraded ?? []
     const pill = $('connPill')
-    if (!webui.exists) {
+    const side = data.side === 'snowluma' ? 'snowluma' : 'napcat'
+    if (side === 'snowluma' && webui.exists) {
+      // SnowLuma 没有二维码/自动登录，顶部只说"哪个协议端 + 在不在线"
+      pill.querySelector('.dot').className = data.ok === true ? 'dot ok' : 'dot warn'
+      $('connText').textContent = data.ok === true
+        ? `SnowLuma${webui.version ? ' v' + webui.version : ''} · ${webui.url}`
+        : `SnowLuma · ${webui.url || ''} · ${KIND[data.kind] ?? '状态取不到'}`
+    } else if (!webui.exists) {
       pill.querySelector('.dot').className = 'dot bad'
       $('connText').textContent = webui.reason || '没有 webui.json'
     } else if (data.ok === true && degraded.length === 0) {
@@ -889,7 +897,9 @@
     }
 
     const versions = data.versions ?? {}
-    $('verPill').textContent = `NapCat ${versions.napcat ?? '—'} · QQ ${versions.qq ?? '—'}`
+    $('verPill').textContent = side === 'snowluma'
+      ? `SnowLuma ${webui.version ? 'v' + webui.version : '—'} · 协议端`
+      : `NapCat ${versions.napcat ?? '—'} · QQ ${versions.qq ?? '—'}`
     $('vNapcat').textContent = versions.napcat ?? '（取不到）'
     $('vQq').textContent = versions.qq ?? '（取不到）'
     $('badgeEnv').textContent = degraded.length === 0 ? '全部可用' : `${degraded.length} 项不可用`
@@ -898,8 +908,13 @@
     $('apiSys').textContent = degraded.includes('unreachable') ? '不可用（NapCat 没连上）' : (versions.sys ? '可用' : '该版本未提供')
 
     $('kUrl').innerHTML = webui.url ? `<code>${webui.url}</code>` : '—'
-    $('k2fa').textContent = webui.enable2FA ? '已开启（登录要 6 位码）' : '未开启'
-    $('kAuto').textContent = webui.autoLoginAccount || '（未设置）'
+    if (side === 'snowluma') {
+      $('k2fa').textContent = '不适用（SnowLuma 用密码登录 WebUI）'
+      $('kAuto').textContent = '不适用（QQ 登录由客户端自己负责）'
+    } else {
+      $('k2fa').textContent = webui.enable2FA ? '已开启（登录要 6 位码）' : '未开启'
+      $('kAuto').textContent = webui.autoLoginAccount || '（未设置）'
+    }
 
     const accounts = data.accounts ?? []
     $('mAccounts').textContent = accounts.length

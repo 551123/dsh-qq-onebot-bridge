@@ -124,6 +124,360 @@ export function publicWebUiConfig(config = {}) {
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * SnowLuma（`@snowluma/runtime`）——与 NapCat **并列**的另一个协议端。
+ *
+ * 它不是 NapCat 的插件，而是一套独立运行时：自己的 WebUI（默认 5099）、自己的 OneBot
+ * 连接（默认 3001），配置目录里放的是 `onebot_<uin>.json`（NapCat 那边叫 `onebot11_<uin>.json`）。
+ * 所以账号中心必须"按侧别说话"：
+ *   · NapCat 侧：扫码、快速登录、自动登录、插件、回收站、备份……（原有全部能力）；
+ *   · SnowLuma 侧：只有账号清单、在线状态、连接状态、网络配置只读 —— 它**没有任何二维码/登录端点**
+ *     （登录是 QQ 客户端自己的事），也没有 2FA / 自动登录的概念。
+ *
+ * 认证差异：NapCat 用 `webui.json` 的 token 算 `sha256(token + '.napcat')`；SnowLuma 只用密码，
+ * `webui.json` 里只存 passwordHash + passwordSalt（**没有明文**），登录后拿到 token 走
+ * `x-snowluma-token` 头。所以这里读一个本地口令文件（路径由控制台 snowlumaSecretFile 或环境变量 SNOWLUMA_SECRET_FILE 给，
+ * 内容 `{"password":"…"}` 或 `{"token":"…"}`），只在服务端使用，绝不下发前端。
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** SnowLuma 的默认安装根（NapCatQQ Desktop 把它的组件放在这里）。 */
+export const SNOWLUMA_DEFAULT_ROOT = 'C:/ProgramData/NapCatQQ Desktop/components/SnowLuma'
+/** SnowLuma 口令文件的默认位置（服务端读；前端永远看不到内容）。 */
+// 口令文件**不给绝对路径默认值**：源码里写死这台机器的路径，等于把私人目录塞进插件树
+// （privacy-unit 会红）。路径由控制台的 snowlumaSecretFile 或环境变量 SNOWLUMA_SECRET_FILE 给。
+export const SNOWLUMA_DEFAULT_SECRET_FILE = ''
+
+/** 安装根：显式参数 > 环境变量 SNOWLUMA_HOME > 默认路径。 */
+export function snowlumaRoot({ dir = '' } = {}) {
+  const given = String(dir ?? '').trim()
+  if (given !== '') return given
+  const env = String(process.env.SNOWLUMA_HOME ?? '').trim()
+  return env !== '' ? env : SNOWLUMA_DEFAULT_ROOT
+}
+
+/** SnowLuma 的配置目录（`<root>/config`）。 */
+export function snowlumaConfigDir({ dir = '' } = {}) {
+  return join(snowlumaRoot({ dir }), 'config')
+}
+
+/**
+ * 读 SnowLuma 的 `config/runtime.json`（WebUI 监听在哪）+ `package.json`（版本）。
+ * 注意：**配置存在不等于在运行** —— 判"用哪一侧"要看端口有没有人听（见 `probeTcpPort`）。
+ */
+export function readSnowLumaRuntime({ dir = '', file = '', readFile = (path) => readFileSync(path, 'utf8') } = {}) {
+  const root = snowlumaRoot({ dir })
+  const configDir = join(root, 'config')
+  const path = file !== '' ? file : join(configDir, 'runtime.json')
+  const base = {
+    side: 'snowluma', root, configDir, path,
+    installed: false, exists: false,
+    host: '127.0.0.1', port: 0, url: '', tls: false,
+    name: 'SnowLuma', version: '', reason: '',
+  }
+  let installed = false
+  let name = 'SnowLuma'
+  let version = ''
+  try {
+    const pkg = JSON.parse(readFile(join(root, 'package.json')))
+    installed = true
+    if (typeof pkg.name === 'string' && pkg.name !== '') name = pkg.name
+    if (typeof pkg.version === 'string') version = pkg.version
+  } catch { /* 没装，或 package.json 不合法：按"没装"处理 */ }
+  if (installed === false) installed = existsSync(join(root, 'index.mjs'))
+  if (path === '' || existsSync(path) === false) {
+    return { ...base, installed, name, version, reason: '没找到 SnowLuma 的 runtime.json（协议端没装，或目录不对）' }
+  }
+  try {
+    const json = JSON.parse(readFile(path))
+    const rawHost = String(json.webuiHost ?? '').trim()
+    const host = rawHost === '' || rawHost === '0.0.0.0' || rawHost === '::' ? '127.0.0.1' : rawHost
+    const port = Number(json.webuiPort) || 0
+    const tls = json.webuiTls?.enabled === true
+    return {
+      ...base, installed, name, version, exists: true, host, port, tls,
+      url: port > 0 ? `${tls ? 'https' : 'http'}://${host}:${port}` : '',
+      reason: port > 0 ? '' : 'runtime.json 里没有 webuiPort',
+    }
+  } catch (error) {
+    return { ...base, installed, name, version, exists: true, reason: `runtime.json 读不出来：${String(error?.message ?? error).slice(0, 80)}` }
+  }
+}
+
+/**
+ * 读 SnowLuma 的 `config/webui.json`：只有 passwordHash/passwordSalt 与 mustChangePassword。
+ * 返回给前端的投影必须走 `publicSnowLumaConfig()`（hash 与 salt 一个字节都不能出）。
+ */
+export function readSnowLumaWebUi({ dir = '', file = '', readFile = (path) => readFileSync(path, 'utf8') } = {}) {
+  const configDir = snowlumaConfigDir({ dir })
+  const path = file !== '' ? file : join(configDir, 'webui.json')
+  const base = { side: 'snowluma', path, exists: false, hasPassword: false, mustChangePassword: false, updatedAt: '', reason: '' }
+  if (path === '' || existsSync(path) === false) {
+    return { ...base, reason: '没找到 SnowLuma 的 webui.json（WebUI 还没初始化）' }
+  }
+  try {
+    const json = JSON.parse(readFile(path))
+    const hash = String(json.passwordHash ?? '')
+    return {
+      ...base,
+      exists: true,
+      hasPassword: hash.length >= 32,
+      mustChangePassword: json.mustChangePassword === true,
+      updatedAt: String(json.updatedAt ?? json.generatedAt ?? ''),
+      reason: hash.length >= 32 ? '' : 'webui.json 里没有设密码',
+    }
+  } catch (error) {
+    return { ...base, exists: true, reason: `webui.json 读不出来：${String(error?.message ?? error).slice(0, 80)}` }
+  }
+}
+
+/** 给前端的安全投影：SnowLuma 没有 token，密码 hash/salt 也不出。 */
+export function publicSnowLumaConfig({ runtime = {}, webui = {} } = {}) {
+  return {
+    side: 'snowluma',
+    exists: runtime.exists === true || runtime.installed === true,
+    installed: runtime.installed === true,
+    host: runtime.host ?? '127.0.0.1',
+    port: Number(runtime.port) || 0,
+    url: runtime.url ?? '',
+    tls: runtime.tls === true,
+    version: runtime.version ?? '',
+    // 这两个字段与 NapCat 的 webui 投影同名，页面不用改结构：SnowLuma 没有 token、没有自动登录。
+    tokenMasked: '',
+    hasToken: webui.hasPassword === true,
+    autoLoginAccount: '',
+    enable2FA: false,
+    passwordSet: webui.hasPassword === true,
+    mustChangePassword: webui.mustChangePassword === true,
+    updatedAt: webui.updatedAt ?? '',
+    reason: runtime.reason || webui.reason || '',
+  }
+}
+
+/**
+ * 探一个 TCP 端口有没有人在听（判断"哪个协议端真的在跑"的唯一可靠判据）。
+ * 显式注入 `probe` 时可以完全离线测（单测就是这么做的）。
+ */
+export function probeTcpPort({ host = '127.0.0.1', port = 0, timeoutMs = 400 } = {}) {
+  return new Promise((done) => {
+    if (!(Number(port) > 0)) { done(false); return }
+    let settled = false
+    let socket = null
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      try { socket?.destroy() } catch { /* 已经关了 */ }
+      done(value)
+    }
+    try {
+      socket = createConnection({ host, port: Number(port) })
+      socket.setTimeout(timeoutMs)
+      socket.once('connect', () => finish(true))
+      socket.once('timeout', () => finish(false))
+      socket.once('error', () => finish(false))
+    } catch { finish(false) }
+  })
+}
+
+/**
+ * 判"现在该用哪一侧"。
+ *
+ * `auto` 的顺序：谁在听端口就用谁；只有一个配置存在就用那个；两个都在听 → SnowLuma 优先
+ * （同时跑两个协议端是临时状态，真要用 NapCat 就在配置里写死 `protocolSide: 'napcat'`）。
+ * 返回 `{ side, why, napcatLive, snowLive }`；`why` 是给人看的一句话，页面直接显示。
+ */
+export async function resolveProtocolSide({ protocolSide = 'auto', napcat = null, snowluma = null, probe = null } = {}) {
+  const explicit = String(protocolSide ?? 'auto').trim()
+  if (explicit === 'napcat' || explicit === 'snowluma') {
+    return { side: explicit, why: `配置里写死了 protocolSide: ${explicit}`, napcatLive: null, snowLive: null }
+  }
+  const check = typeof probe === 'function' ? probe : probeTcpPort
+  const napcatOk = napcat?.exists === true && String(napcat.url ?? '') !== ''
+  const snowOk = snowluma?.exists === true && String(snowluma.url ?? '') !== ''
+  const napcatLive = napcatOk ? (await check({ host: napcat.host, port: Number(napcat.port) || 0 })) === true : false
+  const snowLive = snowOk ? (await check({ host: snowluma.host, port: Number(snowluma.port) || 0 })) === true : false
+  if (snowLive && napcatLive === false) return { side: 'snowluma', why: `SnowLuma WebUI 在 ${snowluma.url} 有响应`, napcatLive, snowLive }
+  if (napcatLive && snowLive === false) return { side: 'napcat', why: `NapCat WebUI 在 ${napcat.url} 有响应`, napcatLive, snowLive }
+  if (napcatLive && snowLive) return { side: 'snowluma', why: '两个协议端的 WebUI 都在听，按 SnowLuma 优先（要改就写 protocolSide）', napcatLive, snowLive }
+  if (snowOk && napcatOk === false) return { side: 'snowluma', why: '只有 SnowLuma 有配置（WebUI 暂时没响应）', napcatLive, snowLive }
+  if (napcatOk && snowOk === false) return { side: 'napcat', why: '只有 NapCat 有配置（WebUI 暂时没响应）', napcatLive, snowLive }
+  if (snowOk && napcatOk) return { side: 'snowluma', why: '两个协议端都有配置，但 WebUI 都没响应', napcatLive, snowLive }
+  return { side: 'napcat', why: '两个协议端都没找到配置', napcatLive, snowLive }
+}
+
+/** 读 SnowLuma 的本地口令文件（服务端私有；只给 `/api/login` 用）。 */
+export function readSnowLumaSecret({ file = '' } = {}) {
+  const given = String(file ?? '').trim()
+  const env = String(process.env.SNOWLUMA_SECRET_FILE ?? '').trim()
+  const path = given !== '' ? given : (env !== '' ? env : SNOWLUMA_DEFAULT_SECRET_FILE)
+  if (path === '') {
+    return { path: '', exists: false, password: '', token: '', reason: '还没配 SnowLuma 口令文件（控制台里填 snowlumaSecretFile，或设环境变量 SNOWLUMA_SECRET_FILE）' }
+  }
+  const base = { path, exists: false, password: '', token: '', reason: '' }
+  // 走 env 的话不用落盘（宿主环境变量优先于文件缺失这一支）
+  const envPassword = String(process.env.SNOWLUMA_PASSWORD ?? '').trim()
+  if (existsSync(path) === false) {
+    if (envPassword !== '') return { ...base, password: envPassword }
+    return { ...base, reason: `没找到 SnowLuma 口令文件：${path}（在里面写 {"password":"你的 WebUI 密码"}）` }
+  }
+  try {
+    const json = JSON.parse(readFileSync(path, 'utf8'))
+    const password = String(json.password ?? '')
+    const token = String(json.token ?? '')
+    if (password === '' && token === '') {
+      if (envPassword !== '') return { ...base, exists: true, password: envPassword }
+      return { ...base, exists: true, reason: `口令文件是空的：往 ${path} 里填 {"password":"你的 WebUI 密码"}（或临时用环境变量 SNOWLUMA_PASSWORD）` }
+    }
+    return { ...base, exists: true, password, token, reason: '' }
+  } catch (error) {
+    return { ...base, exists: true, reason: `口令文件读不出来：${String(error?.message ?? error).slice(0, 80)}` }
+  }
+}
+
+/**
+ * SnowLuma WebUI 的客户端（契约与 NapCat 完全不同）：
+ *
+ *   POST /api/login            { password, totp?, recoveryCode? } → { success, token, mustChangePassword }
+ *   GET  /api/status           → { status: 'running' }
+ *   GET  /api/qq-list          → { list: [{ uin, nickname }] }
+ *   GET  /api/connections      → { list: [...] }
+ *
+ *   · 除 `/api/login` 外都要 `x-snowluma-token: <token>`（或 `Authorization: Bearer`）；token 24h；
+ *   · 失败形状不统一，这里统一成 `{ ok, kind, message, data }`，kind ∈
+ *     no-config / no-secret / unauthorized / rate-limited / unreachable / unsupported / error；
+ *   · 401 会自动用口令重登一次（口令在服务端，重登不需要人参与）。
+ */
+export function createSnowLumaClient({
+  baseUrl = '', password = '', token = '', totp = '',
+  fetchImpl = undefined, now = () => Date.now(), timeoutMs = 8000,
+} = {}) {
+  const doFetch = typeof fetchImpl === 'function' ? fetchImpl : fetch
+  let session = String(token ?? '')
+  let sessionAt = session === '' ? 0 : now()
+  const SESSION_TTL_MS = 24 * 60 * 60 * 1000
+  const stats = { requests: 0, failures: 0, logins: 0 }
+
+  // 统一形状：异常也要带 ok:false（页面按 ok 判定，缺了会被当成成功）
+  const describe = (error) => {
+    const message = String(error?.message ?? error)
+    if (/aborted|abort|timed out|TimeoutError/i.test(message)) return { ok: false, kind: 'unreachable', message: '连不上 SnowLuma WebUI（超时）' }
+    if (/ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up|EACCES/i.test(message)) {
+      return { ok: false, kind: 'unreachable', message: '连不上 SnowLuma WebUI（它没在运行，或端口不对）' }
+    }
+    return { ok: false, kind: 'error', message }
+  }
+
+  const raw = async (path, { method = 'GET', body = null, auth = true } = {}) => {
+    if (baseUrl === '') return { ok: false, kind: 'no-config', message: '没有 SnowLuma WebUI 地址' }
+    stats.requests += 1
+    const headers = { accept: 'application/json' }
+    if (body !== null) headers['content-type'] = 'application/json'
+    if (auth && session !== '') headers['x-snowluma-token'] = session
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await doFetch(`${baseUrl}${path}`, {
+        method,
+        headers,
+        ...(body === null ? {} : { body: JSON.stringify(body) }),
+        signal: controller.signal,
+      })
+      const text = await response.text()
+      let payload = null
+      try { payload = text === '' ? null : JSON.parse(text) } catch { payload = null }
+      const status = Number(response.status) || 0
+      if (status === 401) return { ok: false, kind: 'unauthorized', status, message: 'SnowLuma 说没登录（口令不对或会话过期）', data: payload }
+      if (status === 429) return { ok: false, kind: 'rate-limited', status, message: payload?.message ?? '登录尝试过多，稍后再试', data: payload }
+      if (status >= 400) return { ok: false, kind: 'error', status, message: payload?.message ?? `HTTP ${status}`, data: payload }
+      return { ok: true, kind: 'ok', status, message: '', data: payload }
+    } catch (error) {
+      stats.failures += 1
+      return { ...describe(error), status: 0, data: null }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  const login = async () => {
+    if (password === '' && session === '') {
+      return { ok: false, kind: 'no-secret', message: 'SnowLuma 用密码认证，但没有口令（写进 snowlumaSecretFile 指向的文件）' }
+    }
+    if (password === '') return { ok: true, kind: 'ok', message: '', data: null }
+    stats.logins += 1
+    const body = { password, ...(String(totp ?? '') !== '' ? { totp: String(totp) } : {}) }
+    const result = await raw('/api/login', { method: 'POST', body, auth: false })
+    if (result.ok !== true) return result
+    const got = String(result.data?.token ?? '')
+    if (got === '') return { ok: false, kind: 'error', message: 'SnowLuma 没有返回 token（口令对吗？）' }
+    session = got
+    sessionAt = now()
+    return { ok: true, kind: 'ok', message: '', data: { token: got, mustChangePassword: result.data?.mustChangePassword === true } }
+  }
+
+  const call = async (path, options = {}) => {
+    if (session !== '' && now() - sessionAt > SESSION_TTL_MS) session = ''
+    if (session === '' && (password !== '' || options.auth !== false)) {
+      const ok = await login()
+      if (ok.ok !== true) return ok
+    }
+    const first = await raw(path, options)
+    if (first.kind !== 'unauthorized') return first
+    const again = await login()
+    if (again.ok !== true) return again
+    return raw(path, options)
+  }
+
+  return {
+    stats,
+    login,
+    get baseUrl() { return baseUrl },
+    status: () => call('/api/status'),
+    qqList: () => call('/api/qq-list'),
+    connections: () => call('/api/connections'),
+    processes: () => call('/api/processes'),
+    system: () => call('/api/system'),
+    config: (uin) => call(`/api/config/${encodeURIComponent(String(uin ?? ''))}`),
+    globalConfig: () => call('/api/global-config'),
+    users: () => call('/api/users'),
+    logout: async () => {
+      const result = await call('/api/logout', { method: 'POST', body: {} })
+      session = ''
+      return result
+    },
+    /**
+     * 账号中心要的一份"归一化状态"：账号清单 + 在线 + 连接数。
+     * 形状刻意跟页面已有字段对齐（accounts[].uin / nickname / online），页面不用为侧别改结构。
+     */
+    async overview() {
+      const [status, list, conns] = await Promise.all([call('/api/status'), call('/api/qq-list'), call('/api/connections')])
+      const firstError = [status, list, conns].find((item) => item.ok !== true)
+      if (list.ok !== true) return { ...list, side: 'snowluma' }
+      const connRows = Array.isArray(conns.data?.list) ? conns.data.list : []
+      const accounts = (Array.isArray(list.data?.list) ? list.data.list : []).map((item) => {
+        const uin = String(item?.uin ?? '')
+        const related = connRows.filter((row) => String(row?.uin ?? '') === uin)
+        return {
+          uin,
+          nickname: String(item?.nickname ?? ''),
+          online: true,
+          connections: related.length,
+          instance: 'default',
+        }
+      })
+      return {
+        ok: firstError === undefined, kind: firstError === undefined ? 'ok' : firstError.kind,
+        side: 'snowluma',
+        message: firstError === undefined ? '' : (firstError.message ?? ''),
+        data: {
+          status: String(status.data?.status ?? ''),
+          accounts,
+          connections: connRows,
+          processes: null,
+        },
+      }
+    },
+  }
+}
+
 /**
  * 从 `bootmain/config` 里列出账号：`onebot11_<uin>.json` / `napcat_<uin>.json` 的文件名就是 QQ 号。
  * `instance` 预留：将来多实例并行时同一个 uin 可以有多个（不同目录/端口）。
@@ -135,11 +489,13 @@ export function listAccounts({ napcatBat = '', dir = '', readdir = (path) => rea
   try { names = readdir(configDir) } catch { return [] }
   const byUin = new Map()
   for (const name of names) {
-    const match = /^(onebot11|napcat|napcat_protocol)_(\d{5,12})\.json$/.exec(name)
+    const match = /^(onebot11|napcat|napcat_protocol|onebot)_(\d{5,12})\.json$/.exec(name)
     if (match === null) continue
     const uin = match[2]
     const row = byUin.get(uin) ?? { uin, instance: 'default', hasOneBotConfig: false, hasNapCatConfig: false, files: [] }
     if (match[1] === 'onebot11') row.hasOneBotConfig = true
+    // SnowLuma 的 onebot_<uin>.json 是同一层意思（协议端自己的 OneBot 配置）
+    if (match[1] === 'onebot') row.hasOneBotConfig = true
     if (match[1] === 'napcat') row.hasNapCatConfig = true
     row.files.push(name)
     byUin.set(uin, row)
@@ -441,7 +797,10 @@ const repoRoot = () => join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 /** 版本检查的 10 分钟缓存（进程内）。 */
 const latestReleaseCache = { value: null, at: 0 }
 
-export function createAccountsApi({ napcatBat = '', webUiFile = '', fetchImpl = undefined } = {}) {
+export function createAccountsApi({
+  napcatBat = '', webUiFile = '', fetchImpl = undefined,
+  protocolSide = 'auto', snowlumaDir = '', snowlumaSecretFile = '', sideProbe = null,
+} = {}) {
   const readConfig = () => readWebUiConfig({ napcatBat, file: webUiFile })
   /**
    * 启动 NapCat 用哪个 QQ：优先 autoLoginAccount，其次配置目录（含 bootmain/config）里的 onebot11_<uin>.json。
@@ -485,18 +844,106 @@ export function createAccountsApi({ napcatBat = '', webUiFile = '', fetchImpl = 
     })
   }
   const guard = (config) => config.exists === true && config.url !== '' && config.token !== ''
+  /**
+   * —— 侧别（NapCat / SnowLuma）——
+   * 侧别是**运行时**判定的：用户随时可能换协议端，所以每次 meta/status 都重新探一次；
+   * summary() 是同步的（路由没 await），读这里的缓存。
+   */
+  let sideCache = { side: 'napcat', why: '还没判定（等首次 meta）', at: 0 }
+  const snowRuntime = () => readSnowLumaRuntime({ dir: snowlumaDir })
+  const snowWebUi = () => readSnowLumaWebUi({ dir: snowlumaDir })
+  const refreshSide = async () => {
+    const info = await resolveProtocolSide({
+      protocolSide,
+      napcat: readConfig(),
+      snowluma: snowRuntime(),
+      ...(typeof sideProbe === 'function' ? { probe: sideProbe } : {}),
+    })
+    sideCache = { ...info, at: Date.now() }
+    return sideCache
+  }
+  const currentSide = () => sideCache.side
+  const snowSnapshot = () => {
+    const runtime = snowRuntime()
+    const webuiPublic = publicSnowLumaConfig({ runtime, webui: snowWebUi() })
+    const accounts = listAccounts({ dir: snowlumaConfigDir({ dir: snowlumaDir }) })
+    return { runtime, webuiPublic, accounts }
+  }
+  const snowClient = () => {
+    const runtime = snowRuntime()
+    const secret = readSnowLumaSecret({ file: snowlumaSecretFile })
+    if (runtime.exists !== true || runtime.url === '') {
+      return { ok: false, kind: 'no-config', side: 'snowluma', message: runtime.reason || '没有 SnowLuma 的 runtime.json' }
+    }
+    return {
+      ok: true,
+      secret,
+      client: createSnowLumaClient({ baseUrl: runtime.url, password: secret.password, token: secret.token, fetchImpl }),
+    }
+  }
+  const snowStatus = async () => {
+    const built = snowClient()
+    if (built.ok !== true) return built
+    return built.client.overview()
+  }
+  /** SnowLuma 的网络配置只读：onebot_<uin>.json 里是 {mode, networks:{wsServers,wsClients,httpServers}}。 */
+  const snowlumaNetwork = () => {
+    const dir = snowlumaConfigDir({ dir: snowlumaDir })
+    const rows = []
+    for (const account of listAccounts({ dir })) {
+      const file = join(dir, 'onebot_' + account.uin + '.json')
+      if (existsSync(file) === false) continue
+      try {
+        const json = JSON.parse(readFileSync(file, 'utf8'))
+        const nets = json.networks ?? {}
+        rows.push({
+          uin: account.uin,
+          file: 'onebot_' + account.uin + '.json',
+          servers: Array.isArray(nets.wsServers) ? nets.wsServers : [],
+          clients: Array.isArray(nets.wsClients) ? nets.wsClients : [],
+          https: Array.isArray(nets.httpServers) ? nets.httpServers : [],
+        })
+      } catch (error) {
+        rows.push({ uin: account.uin, file: 'onebot_' + account.uin + '.json', error: String(error?.message ?? error).slice(0, 120), servers: [], clients: [], https: [] })
+      }
+    }
+    return { ok: true, kind: 'ok', side: 'snowluma', message: '', dir, accounts: rows }
+  }
+  // 建实例就探一次（不阻塞创建；失败也不影响 NapCat 侧照常工作）
+  void refreshSide().catch(() => {})
 
-  return {
-    /** 概览：配置（已脱敏）+ 账号清单；不触发任何网络请求。 */
-    summary() {
+  const api = {
+    /**
+     * 概览：配置（已脱敏）+ 账号清单。会**现探一次侧别**（两个本地端口，最坏 400ms），
+     * 因为首屏必须显示对的那一侧；HTTP 请求本身不在这里发（SnowLuma 只读配置与账号清单）。
+     */
+    async summary() {
+      const info = await refreshSide()
+      const side = info.side
+      if (side === 'snowluma') {
+        const snap = snowSnapshot()
+        return {
+          ok: snap.webuiPublic.exists === true,
+          side,
+          why: sideCache.why,
+          webui: snap.webuiPublic,
+          accounts: snap.accounts,
+          state: {
+            side,
+            text: snap.webuiPublic.exists === true ? 'SnowLuma 协议端（账号清单来自 onebot_<uin>.json）' : (snap.webuiPublic.reason || 'SnowLuma 没装好'),
+          },
+        }
+      }
       const config = readConfig()
       const webui = publicWebUiConfig(config)
       const accounts = listAccounts({ napcatBat, dir: webui.exists ? dirname(config.path) : '' })
-      return { ok: webui.exists && webui.hasToken, webui, accounts, state: describeAccountState({ webui, accounts }) }
+      return { ok: webui.exists && webui.hasToken, side, why: sideCache.why, webui, accounts, state: describeAccountState({ webui, accounts }) }
     },
     async status() {
+      const info = await refreshSide()
+      if (info.side === 'snowluma') return snowStatus()
       const config = readConfig()
-      if (!guard(config)) return { ok: false, kind: 'no-config', message: config.reason || '没有可用的 WebUI 配置' }
+      if (!guard(config)) return { ok: false, kind: 'no-config', side: 'napcat', message: config.reason || '没有可用的 WebUI 配置' }
       return client(config).status()
     },
     async qrcode() {
@@ -590,6 +1037,7 @@ export function createAccountsApi({ napcatBat = '', webUiFile = '', fetchImpl = 
      * 只解析、不改写 —— 改配置继续在 NapCat 的界面或文件里做。
      */
     network() {
+      if (currentSide() === 'snowluma') return snowlumaNetwork()
       const config = readConfig()
       const dir = config.exists ? dirname(config.path) : ''
       if (dir === '') return { ok: false, kind: 'no-config', message: config.reason || '没有可用的 WebUI 配置', accounts: [] }
@@ -1297,13 +1745,33 @@ export function createAccountsApi({ napcatBat = '', webUiFile = '', fetchImpl = 
       if (result.ok === true && result.data !== null && result.data !== undefined) sysCache = { at: Date.now(), data: result.data }
       return result
     },
-    /** 顶部信息条：NapCat 版本 + QQ 版本（各自失败不互相拖累）。 */
+    /** 顶部信息条：按侧别给"这是哪个协议端 / 什么版本"。 */
     async meta() {
+      const info = await refreshSide()
+      if (info.side === 'snowluma') {
+        const snap = snowSnapshot()
+        const live = await snowStatus()
+        return {
+          ok: live.ok === true,
+          kind: live.ok === true ? 'ok' : (live.kind ?? 'error'),
+          side: 'snowluma',
+          why: info.why,
+          message: live.ok === true ? '' : (live.message ?? ''),
+          webui: snap.webuiPublic,
+          accounts: snap.accounts,
+          versions: {
+            napcat: snap.runtime.version === '' ? 'SnowLuma' : 'SnowLuma ' + snap.runtime.version,
+            qq: '',
+            sys: null,
+          },
+          degraded: live.ok === true ? [] : [live.kind ?? 'unreachable'],
+        }
+      }
       const config = readConfig()
       const webui = publicWebUiConfig(config)
       const accounts = listAccounts({ napcatBat, dir: webui.exists ? dirname(config.path) : '' })
       if (!guard(config)) {
-        return { ok: false, kind: 'no-config', message: config.reason || '没有可用的 WebUI 配置', webui, accounts, versions: {} }
+        return { ok: false, kind: 'no-config', side: 'napcat', why: info.why, message: config.reason || '没有可用的 WebUI 配置', webui, accounts, versions: {} }
       }
       const one = client(config)
       // 系统状态单独走 `sys()`：它一帧要 3 秒，不能拖慢整页首屏。
@@ -1312,6 +1780,8 @@ export function createAccountsApi({ napcatBat = '', webUiFile = '', fetchImpl = 
       return {
         ok: true,
         kind: 'ok',
+        side: 'napcat',
+        why: info.why,
         message: '',
         webui,
         accounts,
@@ -1392,5 +1862,24 @@ export function createAccountsApi({ napcatBat = '', webUiFile = '', fetchImpl = 
       return client(config).guidBackups()
     },
   }
+  const SNOWLUMA_SAFE = new Set(['summary', 'status', 'meta', 'network', 'netCheck', 'portStatus', 'latestRelease', 'avatar'])
+  /**
+   * SnowLuma 下，NapCat 专属能力（扫码/快速登录/自动登录/插件/日志/回收站/备份/2FA/网络写入…）
+   * 一律早返回 unsupported —— 比让页面看到一堆 misleading 的 unreachable 好。
+   * 用包装而不是创建时裁剪：侧别是运行时的，切回去还要能用。
+   */
+  const wrapped = {}
+  for (const [name, fn] of Object.entries(api)) {
+    // 注意用 apply(api)：purgeTrashOld 这类方法内部靠 this 调同族方法，脱绑就 TypeError
+    wrapped[name] = typeof fn === 'function'
+      ? function (...args) {
+        if (currentSide() === 'snowluma' && SNOWLUMA_SAFE.has(name) === false) {
+          return { ok: false, kind: 'unsupported', side: 'snowluma', message: '当前协议端是 SnowLuma，' + name + ' 只在 NapCat 下可用' }
+        }
+        return fn.apply(api, args)
+      }
+      : fn
+  }
+  return wrapped
 }
 

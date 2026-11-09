@@ -63,7 +63,8 @@ writeFileSync(webuiFile, JSON.stringify({ host: '127.0.0.1', port: napcatPort, t
 // ---- control 服务（用假 api，只装 accounts）----
 const TOKEN = 'control-token'
 const api = {
-  accounts: createAccountsApi({ webUiFile: webuiFile }),
+  // 侧别写死 napcat：同一台机器上 SnowLuma 在听 5099 时 auto 会切过去
+  accounts: createAccountsApi({ protocolSide: 'napcat', webUiFile: webuiFile }),
   async status() { return { ok: true, ports: [], processes: [], runtime: null } },
   async diagnose() { return { ok: true } },
   async qr() { return { exists: false } },
