@@ -8,7 +8,7 @@
  */
 import { execFile, spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PORT_LABELS, configWarnings } from './config.mjs'
 import { createTraceTailer, filterEvents, formatChain, groupChains, readRuntime, readTraceFile, summarizeEvents } from './trace.mjs'
@@ -1616,55 +1616,74 @@ export function createSupervisor(config, deps = {}) {
     return { ok: true, reason: '已写入 ' + spec.file + suffix, notes, table }
   }
   /**
-   * 人设正文（qq-persona.txt，本地补丁 56 / 2026-10-26）。
+   * 人设正文（本地补丁 56 / 2026-10-26；P67 改为热读源）。
    *
-   * 为什么放在控制台：人设是插件根目录里的一个纯文本文件，桥在 import 时读一次
-   * （lib/bridge.js 的 QQ_PERSONA 常量，读失败只打 debugLog）。0.7.0 换版时这个文件没被
+   * 为什么放在控制台：人设是磁盘上的一个纯文本文件，桥按 5 秒 TTL 热读
+   * （P67 之前是 import 期读一次，读失败只打 debugLog）。0.7.0 换版时这个文件没被
    * npm 带过来，就出现过「personaChars = 0 跑了几个小时没人发现」。这里给它一个能看见
    * 字符数、能改、能留备份的入口。
    *
+   * 【P67】源文件不再固定是插件根的 qq-persona.txt：桥把**真正生效**的路径写进快照的
+   * features.personaSrc（现在是米白鲸源 D:/米白鲸/persona/人设.md），控制台优先读写那份，
+   * 找不到才按 env → <桥 cwd>/qq-persona.txt → 插件根 的老顺序退。
+   *
    * 写入只做四件事：去 BOM、CRLF→LF、长度上限、原子落盘（tmp + rename，先留 .bak）。
    * 不写空文件：空正文等于静默无人设，宁可报错让用户去删文件。
-   * 生效要重启 dsh web —— 桥那边是模块常量，不会在运行期重读。
+   * 生效不再需要重启：桥 5 秒内重读（旧注释里的「重启 dsh web 生效」已作废）。
    */
+  const statQuiet = (file) => { try { return statSync(file) } catch { return null } }
+  const isFileOnDisk = (file) => { const st = statQuiet(file); return st !== null && st.isFile() }
   /**
-   * 【本地补丁 7 / 人设搬到 cwd】读优先 <cwd>/qq-persona.txt（存在才用），否则插件根同名文件；
-   * **写永远 <cwd>** —— 插件根那份会被 file: 依赖的 install 覆盖，写进去等于下次 install 就丢。
-   * 显式 QQBRIDGE_PERSONA_FILE 仍然最高优先（调试 / 多实例用）。
+   * 【P67】显式指定的那个文件：config.personaFile → QQBRIDGE_PERSONA_FILE，顺序与桥完全一致。
+   * 它**存不存在都算数**——用户点名要写哪儿就写哪儿，保存时顺着它新建（否则 env 指到一个
+   * 还没建的文件时，控制台会自作主张改到插件根那份老文件上）。
    */
-  const personaReadFile = () => {
-    const explicit = String(process.env.QQBRIDGE_PERSONA_FILE ?? '').trim()
-    if (explicit !== '') return explicit
-    const shared = String(config.cwd ?? '').trim()
-    if (shared !== '') {
-      const candidate = join(shared, 'qq-persona.txt')
-      try { if (statSync(candidate).isFile()) return candidate } catch { /* 不存在就用插件根 */ }
+  const personaNamedFile = () => {
+    for (const file of [config.personaFile, process.env.QQBRIDGE_PERSONA_FILE]) {
+      const value = String(file ?? '').trim()
+      if (value !== '') return value
     }
-    return join(config.pluginRoot || defaultPluginRoot(), 'qq-persona.txt')
+    return ''
   }
-  const personaFile = () => {
-    const explicit = String(process.env.QQBRIDGE_PERSONA_FILE ?? '').trim()
-    if (explicit !== '') return explicit
-    const shared = String(config.cwd ?? '').trim()
-    if (shared !== '') return join(shared, 'qq-persona.txt')
-    return join(config.pluginRoot || defaultPluginRoot(), 'qq-persona.txt')
+  /** 没点名时的兜底候选（只用来找"桥正在读的那份"）：快照 features.personaSrc → bridgeCwd → 插件根。 */
+  const personaCandidates = () => {
+    const list = []
+    const push = (file) => {
+      const value = String(file ?? '').trim()
+      if (value !== '' && !list.includes(value)) list.push(value)
+    }
+    // 桥自己报的生效路径：快照 features.personaSrc（只有它才保证"控制台改的就是桥在读的"）
+    push(runtime()?.features?.personaSrc)
+    const bridgeDir = String(config.bridgeCwd || config.cwd || '').trim()
+    if (bridgeDir !== '') push(join(bridgeDir, 'qq-persona.txt'))
+    push(join(config.pluginRoot || defaultPluginRoot(), 'qq-persona.txt'))
+    return list
+  }
+  /** 读/写的那个文件：点名文件优先；否则第一个真实存在的候选；一个都不存在时给最后一个（= 保存时会新建它）。 */
+  const personaReadFile = () => {
+    const named = personaNamedFile()
+    if (named !== '') return named
+    const list = personaCandidates()
+    return list.find(isFileOnDisk) ?? list[list.length - 1] ?? ''
   }
   const PERSONA_MAX_CHARS = 20000
 
   function personaRead() {
     const file = personaReadFile()
+    const name = basename(file)
+    if (file === '') return { ok: false, exists: false, file: 'qq-persona.txt', text: '', chars: 0, bytes: 0, mtimeMs: 0, reason: '控制台没有配置 bridgeCwd，定位不到人设文件' }
     let text = ''
     try {
       text = String((deps.readFile ?? readFileSync)(file, 'utf8'))
     } catch (error) {
       if (error?.code === 'ENOENT') {
-        return { ok: true, exists: false, file: 'qq-persona.txt', text: '', chars: 0, bytes: 0, mtimeMs: 0, reason: '文件不存在：桥会以「没有人设」运行（宿主 stderr 有人设缺失警告）' }
+        return { ok: true, exists: false, file: name, path: file, text: '', chars: 0, bytes: 0, mtimeMs: 0, reason: '文件不存在：桥会以「没有人设」运行（宿主 stderr 有人设缺失警告）' }
       }
-      return { ok: false, exists: false, file: 'qq-persona.txt', text: '', chars: 0, bytes: 0, mtimeMs: 0, reason: '读取失败：' + String(error?.code ?? error?.message ?? error) }
+      return { ok: false, exists: false, file: name, path: file, text: '', chars: 0, bytes: 0, mtimeMs: 0, reason: '读取失败：' + String(error?.code ?? error?.message ?? error) }
     }
     let mtimeMs = 0
     try { mtimeMs = statSync(file).mtimeMs } catch { /* 读到了内容就算成功，mtime 只用于显示 */ }
-    return { ok: true, exists: true, file: 'qq-persona.txt', text, chars: text.trim().length, bytes: Buffer.byteLength(text, 'utf8'), mtimeMs, reason: '' }
+    return { ok: true, exists: true, file: name, path: file, text, chars: text.trim().length, bytes: Buffer.byteLength(text, 'utf8'), mtimeMs, reason: '' }
   }
 
   function personaWrite(body) {
@@ -1672,10 +1691,12 @@ export function createSupervisor(config, deps = {}) {
     if (typeof raw !== 'string') return { ok: false, reason: '缺少 text（人设正文）' }
     let text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
     text = text.split(String.fromCharCode(13) + String.fromCharCode(10)).join(String.fromCharCode(10)).split(String.fromCharCode(13)).join(String.fromCharCode(10))
-    if (text.trim() === '') return { ok: false, reason: '正文为空：想清空人设请直接删 qq-persona.txt（这里不写空文件，免得重启后静默无人设）' }
+    const file = personaReadFile()
+    if (file === '') return { ok: false, reason: '控制台没有配置 bridgeCwd，定位不到人设文件' }
+    const name = basename(file)
+    if (text.trim() === '') return { ok: false, reason: '正文为空：想清空人设请直接删 ' + name + '（这里不写空文件，免得静默无人设）' }
     if (text.length > PERSONA_MAX_CHARS) return { ok: false, reason: '正文超过 ' + PERSONA_MAX_CHARS + ' 字符（当前 ' + text.length + '）' }
     if (text.endsWith(String.fromCharCode(10)) === false) text += String.fromCharCode(10)
-    const file = personaFile()
     let previous = null
     try { previous = readFileSync(file, 'utf8') } catch { previous = null }
     let backup = false
@@ -1690,7 +1711,7 @@ export function createSupervisor(config, deps = {}) {
       try { rmSync(tmp, { force: true }) } catch { /* 清理失败不影响结论 */ }
       return { ok: false, reason: '写入失败：' + error.message }
     }
-    return { ok: true, reason: '已保存到 ' + file + '（重启 dsh web 生效；旧正文留在同目录的 qq-persona.txt.bak）', backup, chars: text.trim().length, bytes: Buffer.byteLength(text, 'utf8') }
+    return { ok: true, file: name, path: file, reason: '已保存到 ' + file + '（桥 5 秒内热读，下一条消息生效；旧正文留在 ' + name + '.bak）', backup, chars: text.trim().length, bytes: Buffer.byteLength(text, 'utf8') }
   }
   /**
    * NapCat WebUI 的**带 token** 地址（v0.5.9）。

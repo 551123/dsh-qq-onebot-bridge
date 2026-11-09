@@ -292,7 +292,7 @@ export function createControlServer({ config, token, api, ui = '', uiFile = '', 
         json(response, 200, await api.qqCaps())
         return
       }
-      // 补丁 56「人设正文」：读/写插件根的 qq-persona.txt（写入在 supervisor，这里只做路由）。
+      // 补丁 56「人设正文」/ P67：读/写**桥正在读的那份**人设文件（路径由 supervisor 解析，这里只做路由）。
       if (request.method === 'GET' && path === '/api/persona') {
         if (typeof api.personaRead !== 'function') {
           json(response, 200, { ok: false, reason: '当前控制台不支持人设正文页' })

@@ -903,7 +903,7 @@ const CAPS_FIELDS = {
 // 工具全放行、不审计），不是"全部关"。这句话不写清楚，用户拨开关就是在猜。
 const CAPS_TABLE_NOTE = {
   replyStyle: '打开 = 按下面的规则拆条 / 静默；关掉或删表 = 一次把整段话发出去。',
-  persona: '打开 = 用下面的 12 个字段拼人格注入；关掉 = 只用人设文件（qq-persona.txt）。',
+  persona: '打开 = 用下面的 12 个字段拼人格注入；关掉 = 只用人设正文（personaFile，默认 D:/米白鲸/persona/人设.md）。',
   sim: '打开 = 按门槛决定"要不要插话"；关掉 = 永远不主动开口（被 @ 或点名照常回）。',
   mood: '打开 = 按近期互动算心情，并把心情写进提示词（qq-mood.json 里 inject=false 就只算不写）；关掉 = 不注入。',
   autonomy: '打开 = 它自己读未读、自己决定说不说；关掉 = 只在你叫它时说话。名单留空 = 谁都不生效。',
@@ -1220,16 +1220,16 @@ function personaBlock() {
   const badge = personaData.ok === false ? '<span class="badge bad">读不到</span>' : (personaData.exists === true ? '<span class="badge ok">在盘</span>' : '<span class="badge">文件不存在</span>');
   const meta = personaData.ok === false
     ? personaData.reason
-    : personaData.file + (personaData.exists === true ? ' · 生效 ' + personaData.chars + ' 字 / ' + personaData.bytes + ' 字节' : ' · 尚未创建');
+    : (personaData.path || personaData.file) + (personaData.exists === true ? ' · 生效 ' + personaData.chars + ' 字 / ' + personaData.bytes + ' 字节' : ' · 尚未创建');
   return '<div style="margin-top:10px">'
-    + '<div style="display:flex;align-items:center;gap:10px"><b style="color:#d6dae2">人设正文（qq-persona.txt）</b>' + badge
+    + '<div style="display:flex;align-items:center;gap:10px"><b style="color:#d6dae2">人设正文</b>' + badge
     + '<span class="meta">' + capsEsc(meta) + '</span></div>'
     + '<textarea id="persona-text" rows="10" style="width:100%;font-family:inherit" placeholder="这里写人设正文；空正文等于没有人设" oninput="personaCount(this)">' + capsEsc(text) + '</textarea>'
     + '<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
     + '<button onclick="personaSave()">保存正文</button>'
     + '<button onclick="personaRevert()">撤销改动</button>'
     + '<span class="meta" id="persona-count">' + text.trim().length + ' 字</span>'
-    + '<span class="meta">保存后要重启 dsh web 才生效（桥那边是模块常量）；旧正文自动留一份 qq-persona.txt.bak。</span>'
+    + '<span class="meta">保存后下一条消息就生效（桥按 5 秒热读）；旧正文自动留一份同名 .bak。</span>'
     + '</div></div>';
 }
 
