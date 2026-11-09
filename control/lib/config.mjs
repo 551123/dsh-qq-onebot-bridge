@@ -215,9 +215,12 @@ export function detectPaths(config = {}, { env = process.env, exists = existsSyn
   // 免得出现"控制台自己找到了、面板还说没配"——issue #2 就是这么来的）。
   const detectedNapcat = detectNapcatBat({ configured: config.napcatBat, env, exists })
   const napcatBat = detectedNapcat === '' ? '' : resolve(detectedNapcat)
+  // 【本地补丁 62 / 2026-11-01】NapCatQQ Desktop 的登录码落在 ProgramData 下，不在启动器目录的 cache/：
+  // 与面板（lib/settings-routes.js）用同一套候选顺序，免得"控制台能看到、面板说没有"。
   const napcatQr = firstExisting([
     config.napcatQr,
     napcatBat ? join(dirname(napcatBat), 'cache', 'qrcode.png') : '',
+    process.platform === 'win32' ? 'C:\\ProgramData\\NapCatQQ Desktop\\components\\NapCatQQ\\cache\\qrcode.png' : '',
   ])
   const ttsBat = firstExisting([
     config.ttsBat,
